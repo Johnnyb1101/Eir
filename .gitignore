@@ -1,0 +1,9 @@
+CLAUDE.md
+ROADMAP.md
+GLOSSARY.md
+
+venv/
+logs/
+output/
+.env
+__pycache__/

@@ -6,7 +6,7 @@ class RequestSpec(BaseModel):
     output_format: str
     audience: str
 
-class SlideSpec(BaseModel):
+class Slide(BaseModel):
     title: str
     bullets: list[str]
     speaker_notes: str
@@ -15,11 +15,11 @@ class SlideSpec(BaseModel):
 
 class Deck(BaseModel):
     title: str
-    slides: list[SlideSpec] = Field(min_length=1)
+    slides: list[Slide] = Field(min_length=1)
 
 class OutlineEntry(BaseModel):
     title: str
-    object: str
+    objective: str
     time_minutes: int = Field(gt=0)
 
 class Outline(BaseModel):

@@ -11,7 +11,7 @@ class Slide(BaseModel):
     title: str
     bullets: list[str]
     speaker_notes: str
-    time_minutes: int = Field(gt=0)
+    time_minutes: int = Field(gt=0, le=3)
     citations: list[str] = Field(min_length=1)
 
 class Deck(BaseModel):

@@ -8,6 +8,7 @@ def outline_deck(spec):
     prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
 objective (string), time_minutes (integer)).
+Each entry's time_minutes must be between 1 and 3, typically 2.
 The time_minutes of all entries must sum to exactly {spec.duration_minutes}.
 
 Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes."""

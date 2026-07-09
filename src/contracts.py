@@ -1,9 +1,10 @@
 from pydantic import BaseModel, Field
+from typing import Literal
 
 class RequestSpec(BaseModel):
     topic: str
     duration_minutes: int = Field(gt=0)
-    output_format: str
+    output_format: Literal["pptx", "docx", "pdf"] = "pptx"
     audience: str
 
 class Slide(BaseModel):

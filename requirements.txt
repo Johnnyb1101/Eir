@@ -2,3 +2,4 @@ pydantic
 pytest
 anthropic
 pyyaml
+python-pptx

@@ -8,6 +8,10 @@ def render_deck(deck, path):
     for s in deck.slides:
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = s.title
+        slide.shapes.title.left = Inches(0.5)
+        slide.shapes.title.width = Inches(12.3)
+        slide.shapes.title.top = Inches(0.3)
+        slide.shapes.title.height = Inches(1.2)
         body = slide.placeholders[1].text_frame
         body.text = s.bullets[0]
         for b in s.bullets[1:]:

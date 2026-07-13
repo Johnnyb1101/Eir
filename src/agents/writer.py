@@ -1,3 +1,6 @@
+from src.contracts import Slide
+from src.llm import generate
+
 SYSTEM = """You write one slide of medical training material at a time,
 for the audience specified in the request.
 
@@ -14,3 +17,16 @@ Rules:
 4. Return ONLY a single valid JSON object with exactly these fields:
    title, bullets, speaker_notes, time_minutes, citations. No other
    text."""
+
+def write_slide(entry, chunks):
+    sources = ""
+    for chunk in chunks:
+        sources += f"{chunk['id']}: {chunk['text']}\n\n"
+    prompt = f"""Write one training slide as JSON with keys:
+    title (string), bullets (list of strings), speaker_notes (string),
+    time_minutes (integer),
+    citations (list of strings)
+
+Title: {entry.title}. Objective: {entry.objective}. Duration: time_minutes must be exactly {entry.time_minutes}. Source chunks: {sources}"""
+    slide = generate(prompt, Slide, system=SYSTEM)
+    return slide

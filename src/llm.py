@@ -12,6 +12,7 @@ def generate(prompt, schema, system="You return only valid JSON."):
         model=config["model"],
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
+        system=system
     )
     if reply.stop_reason == "max_tokens":
         raise ValueError("Reply truncated by max_tokens cap - raise the limit")

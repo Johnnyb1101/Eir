@@ -30,3 +30,11 @@ def write_slide(entry, chunks):
 Title: {entry.title}. Objective: {entry.objective}. Duration: time_minutes must be exactly {entry.time_minutes}. Source chunks: {sources}"""
     slide = generate(prompt, Slide, system=SYSTEM)
     return slide
+
+def check_citations(slide, chunks):
+    ids = []
+    for chunk in chunks:
+        ids.append(chunk["id"])
+    for cite in slide.citations:
+        if cite not in ids:
+            raise ValueError(f"Slide cites {cite}, which was not recieved")

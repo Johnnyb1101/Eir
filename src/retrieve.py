@@ -8,5 +8,5 @@ def retrieve(topic, n=3):
     chunks = []
     for cid, text, meta in zip(hits["ids"][0], hits["documents"][0],
                                hits["metadatas"][0]):
-        chunks.append({"id": cid, "text": text, "section": meta["section"], "pages": meta["pages"]})
+        chunks.append({"id": cid, "text": text, "section": meta["section"], "pages": meta["pages"], "source": meta["source"]})
     return chunks

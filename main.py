@@ -2,6 +2,10 @@ from src.parser import parse_request
 from src.contracts import Deck, Slide
 from src.render import render_deck
 from src.agents.outliner import outline_deck
+from src.agents.writer import add_sources
+from src.agents.writer import write_slide
+from src.agents.writer import check_citations
+from src.retrieve import retrieve
 
 request = input("What training do you need? ")
 spec = parse_request(request)
@@ -17,8 +21,10 @@ if answer.lower() != "y":
     raise SystemExit
 slides = []
 for e in outline.entries:
-    slides.append(Slide(title=e.title, bullets=[e.objective],
-                        speaker_notes="TBD", time_minutes=e.time_minutes,
-                        citations=["fake-outline"]))
+    chunks = retrieve(f"{e.title}. {e.objective}")
+    slide = write_slide(e, chunks)
+    check_citations(slide, chunks)
+    add_sources(slide, chunks)
+    slides.append(slide)
 render_deck(Deck(title=outline.topic, slides=slides), "output/deck.pptx")
 print(f"Rendered {len(slides)} slides to output/deck.pptx")

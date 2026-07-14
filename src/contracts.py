@@ -7,12 +7,19 @@ class RequestSpec(BaseModel):
     output_format: Literal["pptx", "docx", "pdf"] = "pptx"
     audience: str
 
+class Citation(BaseModel):
+    chunk_id: str
+    source: str
+    section: str
+    pages: str
+
 class Slide(BaseModel):
     title: str
     bullets: list[str]
     speaker_notes: str
     time_minutes: int = Field(gt=0)
     citations: list[str] = Field(min_length=1)
+    sources: list[Citation] = []
 
 class Deck(BaseModel):
     title: str

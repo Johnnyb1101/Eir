@@ -5,6 +5,7 @@ client = chromadb.PersistentClient(path="db")
 collection = client.get_or_create_collection("corpus")
 
 DOC = "corpus/Blunt_Abdominal_Trauma_Splenectomy_Vaccination_13_May_2020_ID09.pdf"
+TITLE = "Blunt Abdominal Trauma (JTS CPG 13 May 2020)"
 
 SECTIONS = [
     ("Background", 2, 3),
@@ -25,7 +26,7 @@ for i, (name, start, end) in enumerate(SECTIONS):
         text += reader.pages[p].extract_text()
     ids.append(f"bat-vacc-2020-s{i}")
     texts.append(text)
-    metas.append({"source": DOC, "section": name, "pages": f"{start}-{end}"})
+    metas.append({"source": TITLE, "path": DOC, "section": name, "pages": f"{start}-{end}"})
 
-collection.add(ids=ids, documents=texts, metadatas=metas)
+collection.upsert(ids=ids, documents=texts, metadatas=metas)
 print(f"Ingested {len(ids)} chunks")

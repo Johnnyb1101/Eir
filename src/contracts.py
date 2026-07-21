@@ -38,6 +38,10 @@ class SlideNote(BaseModel):
     slide_index: int = Field(ge=0)
     note: str
 
+class SlideGrade(BaseModel):
+    passed: bool
+    problems: list[str] = []
+
 class CriticVerdict(BaseModel):
     passed: bool
     notes: list[SlideNote] = []

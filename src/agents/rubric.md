@@ -1,0 +1,22 @@
+# Critic Rubric — grading one slide
+
+The grader is given: one slide (title, bullets, speaker notes), its outline
+entry (title, learning objective), and the full text of every chunk the
+slide cites.
+
+Pass rule: all answers "yes" = pass. Any "no" = fail. Every "no" must come
+with a note naming which question failed and why, specific enough for the
+writer to fix it.
+
+Does the slide's content address the learning objective assigned to it in the outline?
+Does the cited chunk text actually state each claim the slide makes?
+Are numbers, doses, and thresholds on the slide or speaker notes identical to the source?
+Do the speaker notes contents address the learning objective assigned to it in the outline?
+Do the speaker notes agree with the slide's bullets (no contradiction between them)?
+Do the speaker notes have cited chunk text that actually state each claim in the speaker notes?
+
+## Checked by code, not by the critic
+
+- Slide times sum to the requested duration (arithmetic)
+- Every cited chunk ID exists in this run's retrieval results (string lookup)
+- Source/section/page metadata matches the chunk (copied by code, tested once in pytest)

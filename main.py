@@ -43,3 +43,11 @@ if not verdict.passed:
 
 render_deck(Deck(title=outline.topic, slides=slides), "output/deck.pptx")
 print(f"Rendered {len(slides)} slides to output/deck.pptx")
+
+from datetime import datetime
+from src.llm import usage_log
+import json
+
+stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+with open(f"logs/run_{stamp}.json", "w") as f:
+    json.dump(usage_log, f, indent=2)

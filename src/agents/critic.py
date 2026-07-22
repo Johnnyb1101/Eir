@@ -36,7 +36,7 @@ Rubric:
 Outline entry - title: {entry.title}. Objective: {entry.objective}.
 Slide: {slide.model_dump_json()}
 Source chunks: {sources}"""
-    return generate(prompt, SlideGrade, system=SYSTEM)
+    return generate(prompt, SlideGrade, system=SYSTEM, agent="critic")
 
 def critique_slide(slide, entry, chunks):
     problems = code_checks(slide, chunks)

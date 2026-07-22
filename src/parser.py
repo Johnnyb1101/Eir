@@ -7,4 +7,4 @@ output_format (must be exactly one of: "pptx", "docx", "pdf" - use "pptx" if not
 Reply with ONLY the JSON - no other text.
 
 Request: {text}"""
-    return generate(prompt, RequestSpec)
+    return generate(prompt, RequestSpec, agent="parser")

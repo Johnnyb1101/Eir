@@ -36,7 +36,7 @@ Title: {entry.title}. Objective: {entry.objective}. Duration: time_minutes must 
         prompt += ("\nA previous attempt at this slide failed review "
                 "for these reasons:\n- " + "\n- ".join(feedback) +
                 "\nWrite a corrected slide that fixes every problem listed.")
-    slide = generate(prompt, Slide, system=SYSTEM)
+    slide = generate(prompt, Slide, system=SYSTEM, agent="writer")
     return slide
 
 def check_citations(slide, chunks):

@@ -5,6 +5,9 @@ from src.agents.outliner import outline_deck
 from src.agents.writer import add_sources, write_slide
 from src.retrieve import retrieve
 from src.agents.critic import critique_slide
+from datetime import datetime
+from src.llm import usage_log
+import json
 
 request = input("What training do you need? ")
 spec = parse_request(request)
@@ -26,6 +29,14 @@ for i, e in enumerate(outline.entries):
     for attempt in range(3):
         slide = write_slide(e, chunks, feedback, slide_index=i, attempt=attempt + 1)
         grade = critique_slide(slide, e, chunks, slide_index=i, attempt=attempt + 1)
+        usage_log.append({
+            "agent": "verdict",
+            "slide_index": i,
+            "attempt": attempt + 1,
+            "passed": grade.passed,
+            "problems": grade.problems,
+            "time": datetime.now().isoformat(timespec="seconds")
+        })
         if grade.passed:
             break
         feedback = grade.problems
@@ -43,10 +54,6 @@ if not verdict.passed:
 
 render_deck(Deck(title=outline.topic, slides=slides), "output/deck.pptx")
 print(f"Rendered {len(slides)} slides to output/deck.pptx")
-
-from datetime import datetime
-from src.llm import usage_log
-import json
 
 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 with open(f"logs/run_{stamp}.json", "w") as f:

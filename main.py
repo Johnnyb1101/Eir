@@ -24,8 +24,8 @@ for i, e in enumerate(outline.entries):
     chunks = retrieve(f"{e.title}. {e.objective}")
     feedback = None
     for attempt in range(3):
-        slide = write_slide(e, chunks, feedback)
-        grade = critique_slide(slide, e, chunks)
+        slide = write_slide(e, chunks, feedback, slide_index=i, attempt=attempt + 1)
+        grade = critique_slide(slide, e, chunks, slide_index=i, attempt=attempt + 1)
         if grade.passed:
             break
         feedback = grade.problems

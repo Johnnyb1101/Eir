@@ -22,7 +22,7 @@ Rules:
    no more than 5 bullets per slide. The full detail goes in the speaker
    notes, never on the slide face."""
 
-def write_slide(entry, chunks, feedback=None):
+def write_slide(entry, chunks, feedback=None, slide_index=None, attempt=None):
     sources = ""
     for chunk in chunks:
         sources += f"{chunk['id']}: {chunk['text']}\n\n"
@@ -36,7 +36,7 @@ Title: {entry.title}. Objective: {entry.objective}. Duration: time_minutes must 
         prompt += ("\nA previous attempt at this slide failed review "
                 "for these reasons:\n- " + "\n- ".join(feedback) +
                 "\nWrite a corrected slide that fixes every problem listed.")
-    slide = generate(prompt, Slide, system=SYSTEM, agent="writer")
+    slide = generate(prompt, Slide, system=SYSTEM, agent="writer", slide_index=slide_index, attempt=attempt)
     return slide
 
 def check_citations(slide, chunks):

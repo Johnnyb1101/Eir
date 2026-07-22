@@ -24,7 +24,7 @@ def code_checks(slide, chunks):
             problems.append(f"Cites {cite}, which is not in the retrieved chunks")
     return problems
 
-def grade_slide(slide, entry, chunks):
+def grade_slide(slide, entry, chunks, slide_index=None, attempt=None):
     sources = ""
     for chunk in chunks:
         sources += f"{chunk['id']}: {chunk['text']}\n\n"
@@ -36,10 +36,10 @@ Rubric:
 Outline entry - title: {entry.title}. Objective: {entry.objective}.
 Slide: {slide.model_dump_json()}
 Source chunks: {sources}"""
-    return generate(prompt, SlideGrade, system=SYSTEM, agent="critic")
+    return generate(prompt, SlideGrade, system=SYSTEM, agent="critic", slide_index=slide_index, attempt=attempt)
 
-def critique_slide(slide, entry, chunks):
+def critique_slide(slide, entry, chunks, slide_index=None, attempt=None):
     problems = code_checks(slide, chunks)
     if problems:
         return SlideGrade(passed=False, problems=problems)
-    return grade_slide(slide, entry, chunks)
+    return grade_slide(slide, entry, chunks, slide_index=slide_index, attempt=attempt)

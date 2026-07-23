@@ -14,7 +14,11 @@ RULES:
 3.  Your verdict will be based on the rubric's pass rule, all six yes = passed true;
     any no = passed false, one problem string per "no", naming the question number and what
     specifically failed.
-4.  Return ONLY a single valid JSON object with exactly these fields: passed, problems"""
+4.  Return ONLY a single valid JSON object with exactly these fields:
+    - "passed": a boolean (true or false)
+    - "problems": a JSON array of strings, one string per failed question. Use an empty array
+    [] if nothing failed. Even a single problem must be inside the array:
+    {"problems": ["Q1: ..."]}, never {"problems": "Q1: ..."}"""
 
 def code_checks(slide, chunks):
     problems = []

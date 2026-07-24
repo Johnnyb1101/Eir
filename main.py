@@ -9,6 +9,7 @@ from datetime import datetime
 from src.llm import usage_log
 import json
 from src.packet import write_packet
+from pydantic import ValidationError
 
 request = input("What training do you need? ")
 spec = parse_request(request)
@@ -28,8 +29,14 @@ verdicts = []
 for i, e in enumerate(outline.entries):
     chunks = retrieve(f"{e.title}. {e.objective}")
     feedback = None
+    slide = None
     for attempt in range(3):
-        slide = write_slide(e, chunks, feedback, slide_index=i, attempt=attempt + 1)
+        try:
+            slide = write_slide(e, chunks, feedback, slide_index=i, attempt=attempt + 1)
+        except (ValidationError, json.JSONDecodeError) as err:
+            feedback = [f"Your previous reply was rejected: {err}"]
+            print(f" Attempt {attempt + 1} invalid output")
+            continue
         grade = critique_slide(slide, e, chunks, slide_index=i, attempt=attempt + 1)
         usage_log.append({
             "agent": "verdict",
@@ -43,6 +50,8 @@ for i, e in enumerate(outline.entries):
             break
         feedback = grade.problems
         print(f"  Attempt {attempt + 1} failed: {grade.problems}")
+    if slide is None:
+        raise ValueError(f"Slide {i} failed contract 3 times - escalating to human review")
     if not grade.passed:
         failed_notes.append(SlideNote(slide_index=i, note="; ".join(grade.problems)))
     add_sources(slide, chunks)

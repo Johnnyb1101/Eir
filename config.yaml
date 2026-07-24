@@ -1,2 +1,2 @@
-provider: anthropic
-model: claude-sonnet-5
+provider: ollama
+model: llama3.2

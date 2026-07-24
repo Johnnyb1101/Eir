@@ -1,6 +1,7 @@
 import json
 import anthropic
 import yaml
+import requests
 from datetime import datetime
 
 client = anthropic.Anthropic()
@@ -22,6 +23,19 @@ def _generate_anthropic(prompt, system):
     text = next(b.text for b in reply.content if b.type == "text")
     return text, reply.usage.input_tokens, reply.usage.output_tokens
 
+def _generate_ollama(prompt, system):
+    reply = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
+            "model": config["model"],
+            "messages": [{"role": "sysyem", "content": system},
+                         {"role": "user", "content": prompt}],
+            "stream": False,
+        },
+        timeout=600
+    ).json()
+    return reply ["message"]["content"], reply["prompt_eval_count"], reply["eval_count"]
+
 def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
              slide_index=None, attempt=None):
     if config["provider"] == "anthropic":
@@ -39,5 +53,6 @@ def generate(prompt, schema, system="You return only valid JSON.", agent="unknow
         "output_tokens": tokens_out,
         "time": datetime.now().isoformat(timespec="seconds"),
     })
+    print(f"RAW REPLY >>>{text[:300]}<<<")
     data = json.loads(text[text.find("{") : text.rfind("}") + 1])
     return schema.model_validate(data)

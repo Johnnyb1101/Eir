@@ -10,8 +10,7 @@ with open("config.yaml") as f:
 
 usage_log = []
 
-def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
-             slide_index=None, attempt=None):
+def _generate_anthropic(prompt, system):
     reply = client.messages.create(
         model=config["model"],
         max_tokens=4000,
@@ -20,14 +19,25 @@ def generate(prompt, schema, system="You return only valid JSON.", agent="unknow
     )
     if reply.stop_reason == "max_tokens":
         raise ValueError("Reply truncated by max_tokens cap - raise the limit")
+    text = next(b.text for b in reply.content if b.type == "text")
+    return text, reply.usage.input_tokens, reply.usage.output_tokens
+
+def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
+             slide_index=None, attempt=None):
+    if config["provider"] == "anthropic":
+        text, tokens_in, tokens_out = _generate_anthropic(prompt, system)
+    elif config["provider"] == "ollama":
+        text, tokens_in, tokens_out = _generate_ollama(prompt, system)
+    else:
+        raise ValueError(f"Unknown provider: {config['provider']}")
+    
     usage_log.append({
         "agent": agent,
         "slide_index": slide_index,
         "attempt": attempt,
-        "input_tokens": reply.usage.input_tokens,
-        "output_tokens": reply.usage.output_tokens,
+        "input_tokens": tokens_in,
+        "output_tokens": tokens_out,
         "time": datetime.now().isoformat(timespec="seconds"),
     })
-    text = next(b.text for b in reply.content if b.type == "text")
     data = json.loads(text[text.find("{") : text.rfind("}") + 1])
     return schema.model_validate(data)

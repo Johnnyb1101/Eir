@@ -25,7 +25,7 @@ Rules:
 def write_slide(entry, chunks, feedback=None, slide_index=None, attempt=None):
     sources = ""
     for chunk in chunks:
-        sources += f"{chunk['id']}: {chunk['text']}\n\n"
+        sources += f"chunk_id: {chunk['id']}: {chunk['text']}\n\n"
     prompt = f"""Write one training slide as JSON with keys:
     title (string), bullets (list of strings), speaker_notes (string),
     time_minutes (integer),

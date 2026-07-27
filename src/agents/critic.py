@@ -31,7 +31,7 @@ def code_checks(slide, chunks):
 def grade_slide(slide, entry, chunks, slide_index=None, attempt=None):
     sources = ""
     for chunk in chunks:
-        sources += f"{chunk['id']}: {chunk['text']}\n\n"
+        sources += f"chunk_id: {chunk['id']}\ntext: {chunk['text']}\n\n"
     prompt = f"""Grade this slide against the rubric.
 
 Rubric:

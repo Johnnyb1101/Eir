@@ -28,7 +28,7 @@ def _generate_ollama(prompt, system):
         "http://localhost:11434/api/chat",
         json={
             "model": config["model"],
-            "messages": [{"role": "sysyem", "content": system},
+            "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": prompt}],
             "stream": False,
         },

@@ -1,5 +1,7 @@
 from src.contracts import Outline
 from src.llm import generate
+from pydantic import ValidationError
+import json
 
 SYSTEM = """You are a curriculum designer for military medical training.
 You return ONLY valid JSON - no other text."""
@@ -14,7 +16,11 @@ Each entry's time_minutes must be between 1 and 3, typically 2.
 The time_minutes of all entries must sum to exactly {spec.duration_minutes}.
 
 Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{feedback}"""
-        outline = generate(prompt, Outline, system=SYSTEM, agent="outliner", attempt=attempt)
+        try:
+            outline = generate(prompt, Outline, system=SYSTEM, agent="outliner", attempt=attempt)
+        except (ValidationError, json.JSONDecodeError) as err:
+            feedback = f"\nYour previous reply was rejected: {err}"
+            continue
         total = sum(e.time_minutes for e in outline.entries)
         if abs(total - spec.duration_minutes) <= 1:
             return outline

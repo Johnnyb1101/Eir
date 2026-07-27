@@ -53,6 +53,5 @@ def generate(prompt, schema, system="You return only valid JSON.", agent="unknow
         "output_tokens": tokens_out,
         "time": datetime.now().isoformat(timespec="seconds"),
     })
-    print(f"RAW REPLY >>>{text[:300]}<<<")
     data = json.loads(text[text.find("{") : text.rfind("}") + 1])
     return schema.model_validate(data)

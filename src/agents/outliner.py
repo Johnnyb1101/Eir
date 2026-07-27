@@ -6,16 +6,20 @@ import json
 SYSTEM = """You are a curriculum designer for military medical training.
 You return ONLY valid JSON - no other text."""
 
-def outline_deck(spec):
+def outline_deck(spec, human_feedback=None):
+    instructor_note = ""
+    if human_feedback:
+        instructor_note = (f"\nAn instructor rejected the previous outline for this reason:"
+                    f"\n{human_feedback}\nWrite a new outline that addresses it.")
     feedback = ""
+    n_entries = spec.duration_minutes // 2
     for attempt in range(3):
         prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
 objective (string), time_minutes (integer)).
-Each entry's time_minutes must be between 1 and 3, typically 2.
-The time_minutes of all entries must sum to exactly {spec.duration_minutes}.
+Return exactly {n_entries} entries, each with time_minutes of 2.
 
-Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{feedback}"""
+Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{instructor_note}{feedback}"""
         try:
             outline = generate(prompt, Outline, system=SYSTEM, agent="outliner", attempt=attempt)
         except (ValidationError, json.JSONDecodeError) as err:

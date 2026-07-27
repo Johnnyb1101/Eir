@@ -13,16 +13,23 @@ from pydantic import ValidationError
 
 request = input("What training do you need? ")
 spec = parse_request(request)
-outline = outline_deck(spec)
-
-print(f"\nProposed outline for '{outline.topic}':")
-for e in outline.entries:
-    print(f"  {e.time_minutes} min - {e.title}")
-
-answer = input("\nApprove this outline? (y/n) ")
-if answer.lower() != "y":
-    print("Outline rejected. Stopping.")
-    raise SystemExit
+note = None
+while True:
+    outline = outline_deck(spec, note)
+    print(f"\nProposed outline for '{outline.topic}':")
+    for e in outline.entries:
+        print(f"  {e.time_minutes} min - {e.title}")
+        print(f"        {e.objective}")
+    answer = input("\nApprove this outline? (y/n) ")
+    if answer.lower() == "y":
+        break
+    note = input("What needs to change? ")
+    usage_log.append({
+        "agent": "human",
+        "action": "outline_rejected",
+        "note": note,
+        "time": datetime.now().isoformat(timespec="seconds"),
+    })
 slides = []
 failed_notes = []
 verdicts = []

@@ -33,6 +33,7 @@ while True:
 slides = []
 failed_notes = []
 verdicts = []
+attempts = []
 for i, e in enumerate(outline.entries):
     chunks = retrieve(f"{e.title}. {e.objective}")
     feedback = None
@@ -63,6 +64,7 @@ for i, e in enumerate(outline.entries):
         failed_notes.append(SlideNote(slide_index=i, note="; ".join(grade.problems)))
     add_sources(slide, chunks)
     verdicts.append(grade)
+    attempts.append(attempt + 1)
     slides.append(slide)
 
 verdict = CriticVerdict(passed=not failed_notes, notes=failed_notes)
@@ -73,11 +75,11 @@ if not verdict.passed:
 
 deck = Deck(title=outline.topic, slides=slides)
 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-render_deck(deck, f"output/deck_{stamp}.pptx")
-print(f"Rendered {len(slides)} slides to output/deck_{stamp}.pptx")
+render_deck(deck, "output/deck.pptx")
+print(f"Rendered {len(slides)} slides to output/deck.pptx")
 
 with open(f"logs/run_{stamp}.json", "w") as f:
     json.dump(usage_log, f, indent=2)
 
-write_packet(deck, verdicts, f"output/review_packet_{stamp}.md")
+write_packet(deck, verdicts, attempts, f"output/review_packet_{stamp}.md")
 print(f"Review packet written to output/review_packet_{stamp}.md")

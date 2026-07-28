@@ -9,7 +9,7 @@ def test_packet_includes_slide_content(tmp_path):
                   time_minutes=5, citations=["cpg-hem-s3-p12"])
     deck = Deck(title="Test Deck", slides=[slide])
     verdicts = [SlideGrade(passed=True)]
-    write_packet(deck, verdicts, path)
+    write_packet(deck, verdicts, [1], path)
     text = path.read_text(encoding="utf-8")
     assert "High and tight" in text
     assert "Reassess distal pulse" in text

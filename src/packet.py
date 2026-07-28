@@ -6,6 +6,13 @@ def write_packet(deck, verdicts, path):
     lines.append("")
     for i, (slide, verdict) in enumerate(zip(deck.slides, verdicts)):
         lines.append(f"## Slide {i}: {slide.title}")
+        lines.append("**Content:**")
+        for b in slide.bullets:
+            lines.append(f"- {b}")
+        lines.append("")
+        lines.append("**Speaker notes:**")
+        lines.append(slide.speaker_notes)
+        lines.append("")
         lines.append("**Citations:**")
         for c in slide.sources:
             lines.append(f"- {c.source}, {c.section}, {c.pages}")

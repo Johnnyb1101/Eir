@@ -72,10 +72,10 @@ if not verdict.passed:
         print(f"  Slide {note.slide_index}: {note.note}")
 
 deck = Deck(title=outline.topic, slides=slides)
-render_deck(deck, "output/deck.pptx")
-print(f"Rendered {len(slides)} slides to output/deck.pptx")
-
 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+render_deck(deck, f"output/deck_{stamp}.pptx")
+print(f"Rendered {len(slides)} slides to output/deck_{stamp}.pptx")
+
 with open(f"logs/run_{stamp}.json", "w") as f:
     json.dump(usage_log, f, indent=2)
 

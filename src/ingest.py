@@ -8,7 +8,7 @@ def doc_id(path):
 def doc_title(path):
     return Path(path).stem.replace("_", " ")
 
-SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM")
+SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM", "REFERENCES")
 
 def is_heading(line):
     return line.strip().isupper()

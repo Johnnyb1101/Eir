@@ -1,4 +1,4 @@
-from src.ingest import is_heading, clean_heading, keep_chunk, doc_id, doc_title, read_lines, chunk_document
+from src.ingest import is_heading, clean_heading, keep_chunk, doc_id, doc_title, read_lines, chunk_document, unmatched_toc
 
 def test_real_headings_are_detected():
     assert is_heading("VACCINE   DOSING ")
@@ -42,3 +42,8 @@ def test_no_chunk_duplicates_or_contains_another():
         for j, b in enumerate(kept):
             if i != j:
                 assert a not in b
+
+def test_unmatched_toc_entries_are_reported():
+    toc = ["PURPOSE", "BACKGROUND", "REFERENCES"]
+    headings = {3: "BACKGROUND", 40: "REFERENCES"}
+    assert unmatched_toc(toc, headings) == ["PURPOSE"]

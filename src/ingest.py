@@ -24,6 +24,39 @@ def read_lines(path):
 def clean_heading(line):
     return " ".join(line.split())
 
+def toc_key(text):
+    return "".join(text.split("..")[0].split()).upper()
+
+def read_toc(lines):
+    entries = []
+    for page_number, line in lines:
+        if "..." in line:
+            entries.append(toc_key(line))
+    return entries
+
+def find_headings(lines, toc):
+    headings = {}
+    for i, (page_number, line) in enumerate(lines):
+        if not is_heading(line) or "..." in line:
+            continue
+        if toc_key(line) in toc:
+            headings[i] = clean_heading(line)
+        elif i + 1 < len(lines):
+            joined = line + " " + lines[i + 1][1]
+            if toc_key(joined) in toc:
+                headings[i] = clean_heading(joined)
+    return headings
+
+def unmatched_toc(toc, headings):
+    found = []
+    for label in headings.values():
+        found.append(toc_key(label))
+    missing = []
+    for entry in toc:
+        if entry not in found:
+            missing.append(entry)
+    return missing
+
 def furniture_key(line):
     return clean_heading(line).rstrip("0123456789 ")
 
@@ -43,12 +76,14 @@ def find_furniture(lines):
 
 def chunk_document(lines):
     furniture = find_furniture(lines)
+    toc = read_toc(lines)
+    headings = find_headings(lines, toc)
     chunks = []
-    for page_number, line in lines:
+    for i, (page_number, line) in enumerate(lines):
         if furniture_key(line) in furniture:
             continue
-        if is_heading(line):
-            chunks.append({"section": clean_heading(line),
+        if i in headings:
+            chunks.append({"section": headings[i],
                            "start_page": page_number,
                            "end_page": page_number,
                            "text": ""})
@@ -79,8 +114,11 @@ if __name__ == "__main__":
 
     ids, texts, metas = [], [], []
     for pdf in sorted(Path("corpus").glob("*.pdf")):
-        chunks = chunk_document(read_lines(pdf))
-        for index, chunk in enumerate(chunks):
+        lines = read_lines(pdf)
+        headings = find_headings(lines, read_toc(lines))
+        for entry in unmatched_toc(read_toc(lines), headings):
+            print(f"  ! {pdf.name}: TOC lists {entry} but no heading matched")
+        for index, chunk in enumerate(chunk_document(lines)):
             if keep_chunk(chunk):
                 ids.append(f"{doc_id(pdf)}-s{index}")
                 texts.append(chunk["text"])

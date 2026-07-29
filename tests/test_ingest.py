@@ -1,4 +1,4 @@
-from src.ingest import is_heading
+from src.ingest import is_heading, clean_heading, keep_chunk
 
 def test_real_headings_are_detected():
     assert is_heading("VACCINE   DOSING ")
@@ -9,3 +9,19 @@ def test_body_lines_are_not_headings():
     assert not is_heading("1. Prevnar 13 (PCV13) AND Pneumovax 23 (PPSV23) are both recommended.8 ")
     assert not is_heading("Guideline Only/Not a Substitute for Clinical Judgment 4 ")
     assert not is_heading("   ")
+
+def test_heading_whitespace_is_collapsed():
+    assert clean_heading("VACCINE   DOSING ") == "VACCINE DOSING"
+    assert clean_heading("HAEMOPHILUS   INFLUENZAE  TYPE  B  (HIB)  ") == "HAEMOPHILUS INFLUENZAE TYPE B (HIB)"
+
+def test_broken_words_are_left_alone():
+    assert clean_heading("VACCINATION  AD MINISTRATION  TIME  ") == "VACCINATION AD MINISTRATION TIME"
+
+def test_empty_parent_headings_are_dropped():
+    assert not keep_chunk({"section": "VACCINE DOSING", "text": ""})
+    assert not keep_chunk({"section": "PI MONITORING", "text": "\n\n"})
+
+def test_furniture_and_image_only_sections_dropped():
+    assert not keep_chunk({"section": "TABLE OF CONTENTS", "text": "Background ... 2"})
+    assert not keep_chunk({"section": "APPENDIX A: ALGORITHM", "text": " \n \n\n"})
+    assert keep_chunk({"section": "DATA SOURCES", "text": "Number of patients who received vaccines"})

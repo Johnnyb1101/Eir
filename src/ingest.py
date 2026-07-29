@@ -1,6 +1,9 @@
 from pypdf import PdfReader
 import chromadb
 
+def is_heading(line):
+    return line.strip().isupper()
+
 client = chromadb.PersistentClient(path="db")
 collection = client.get_or_create_collection("corpus")
 
@@ -18,15 +21,16 @@ SECTIONS = [
     ("Appendix B", 9, 9),
 ]
 
-reader = PdfReader(DOC)
-ids, texts, metas = [], [], []
-for i, (name, start, end) in enumerate(SECTIONS):
-    text = ""
-    for p in range(start - 1, end):
-        text += reader.pages[p].extract_text()
-    ids.append(f"bat-vacc-2020-s{i}")
-    texts.append(text)
-    metas.append({"source": TITLE, "path": DOC, "section": name, "pages": f"{start}-{end}"})
+if __name__ == "__main__":
+    reader = PdfReader(DOC)
+    ids, texts, metas = [], [], []
+    for i, (name, start, end) in enumerate(SECTIONS):
+        text = ""
+        for p in range(start - 1, end):
+            text += reader.pages[p].extract_text()
+        ids.append(f"bat-vacc-2020-s{i}")
+        texts.append(text)
+        metas.append({"source": TITLE, "path": DOC, "section": name, "pages": f"{start}-{end}"})
 
-collection.upsert(ids=ids, documents=texts, metadatas=metas)
-print(f"Ingested {len(ids)} chunks")
+    collection.upsert(ids=ids, documents=texts, metadatas=metas)
+    print(f"Ingested {len(ids)} chunks")

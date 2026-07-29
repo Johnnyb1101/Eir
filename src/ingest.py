@@ -1,5 +1,14 @@
 from pypdf import PdfReader
 import chromadb
+from pathlib import Path
+
+def doc_id(path):
+    return Path(path).stem.lower().replace("_", "-")
+
+def doc_title(path):
+    return Path(path).stem.replace("_", " ")
+
+SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM")
 
 def is_heading(line):
     return line.strip().isupper()
@@ -59,31 +68,23 @@ def keep_chunk(chunk):
 client = chromadb.PersistentClient(path="db")
 collection = client.get_or_create_collection("corpus")
 
-DOC = "corpus/Blunt_Abdominal_Trauma_Splenectomy_Vaccination_13_May_2020_ID09.pdf"
-SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM")
-TITLE = "Blunt Abdominal Trauma (JTS CPG 13 May 2020)"
 
-SECTIONS = [
-    ("Background", 2, 3),
-    ("Overwhelming Post-Splenectomy Infection", 3, 3),
-    ("Vaccine Candidates", 3, 3),
-    ("Vaccine Dosing", 4, 4),
-    ("Vaccine Administration Time", 4, 5),
-    ("Vaccine Documentation", 5, 5),
-    ("PI Monitoring", 6, 7),
-    ("Appendix B", 9, 9),
-]
+def chunk_meta(pdf, chunk):
+    return {"source": doc_title(pdf), "path": str(pdf),
+            "section": chunk["section"], "pages": f"{chunk['start_page']}-{chunk['end_page']}"}
 
 if __name__ == "__main__":
-    reader = PdfReader(DOC)
+    client.delete_collection("corpus")
+    collection = client.get_or_create_collection("corpus")
+
     ids, texts, metas = [], [], []
-    for i, (name, start, end) in enumerate(SECTIONS):
-        text = ""
-        for p in range(start - 1, end):
-            text += reader.pages[p].extract_text()
-        ids.append(f"bat-vacc-2020-s{i}")
-        texts.append(text)
-        metas.append({"source": TITLE, "path": DOC, "section": name, "pages": f"{start}-{end}"})
+    for pdf in sorted(Path("corpus").glob("*.pdf")):
+        chunks = chunk_document(read_lines(pdf))
+        for index, chunk in enumerate(chunks):
+            if keep_chunk(chunk):
+                ids.append(f"{doc_id(pdf)}-s{index}")
+                texts.append(chunk["text"])
+                metas.append(chunk_meta(pdf, chunk))
 
     collection.upsert(ids=ids, documents=texts, metadatas=metas)
     print(f"Ingested {len(ids)} chunks")

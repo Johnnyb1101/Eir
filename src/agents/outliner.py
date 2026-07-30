@@ -6,18 +6,35 @@ import json
 SYSTEM = """You are a curriculum designer for military medical training.
 You return ONLY valid JSON - no other text."""
 
-def outline_deck(spec, human_feedback=None):
+def sort_key(chunk):
+    doc, index = chunk["id"].rsplit("-s", 1)
+    return (doc, int(index))
+
+def corpus_view(chunks):
+    lines = []
+    for c in sorted(chunks, key=sort_key):
+        lines.append(f"- {c['id']}  ({c['section']})")
+    return "\n".join(lines)
+
+def outline_deck(spec, chunks, human_feedback=None):
     instructor_note = ""
     if human_feedback:
         instructor_note = (f"\nAn instructor rejected the previous outline for this reason:"
                     f"\n{human_feedback}\nWrite a new outline that addresses it.")
     feedback = ""
     n_entries = spec.duration_minutes // 2
+    available = corpus_view(chunks)
     for attempt in range(3):
         prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
 objective (string), time_minutes (integer)).
 Return exactly {n_entries} entries, each with time_minutes of 2.
+
+Source material available to the writer:
+{available}
+
+Design the outline this audience needs. Do not narrow it to fit the list above.
+If the audience needs something these sources do not cover, include it anyway.
 
 Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{instructor_note}{feedback}"""
         try:

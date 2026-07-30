@@ -14,8 +14,9 @@ from pydantic import ValidationError
 request = input("What training do you need? ")
 spec = parse_request(request)
 note = None
+topic_chunks = retrieve(spec.topic)
 while True:
-    outline = outline_deck(spec, note)
+    outline = outline_deck(spec, topic_chunks, note)
     print(f"\nProposed outline for '{outline.topic}':")
     for e in outline.entries:
         print(f"  {e.time_minutes} min - {e.title}")

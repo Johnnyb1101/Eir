@@ -29,6 +29,7 @@ class OutlineEntry(BaseModel):
     title: str
     objective: str
     time_minutes: int = Field(gt=0, le=3)
+    provenance: str = Field(min_length=1)
 
 class Outline(BaseModel):
     topic: str

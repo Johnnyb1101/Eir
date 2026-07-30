@@ -27,7 +27,7 @@ def outline_deck(spec, chunks, human_feedback=None):
     for attempt in range(3):
         prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
-objective (string), time_minutes (integer)).
+objective (string), time_minutes (integer), provenance (string)).
 Return exactly {n_entries} entries, each with time_minutes of 2.
 
 Source material available to the writer:
@@ -35,6 +35,11 @@ Source material available to the writer:
 
 Design the outline this audience needs. Do not narrow it to fit the list above.
 If the audience needs something these sources do not cover, include it anyway.
+
+For each entry, provenance states where its content comes from.
+If it is built on the source material above, list the chunk IDs you used.
+If the source material does not cover it, say so plainly and name what you
+are drawing on instead - a specific guideline, or your own general knowledge.
 
 Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{instructor_note}{feedback}"""
         try:

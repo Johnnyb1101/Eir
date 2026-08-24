@@ -1,7 +1,7 @@
 from src.contracts import Slide
 import pytest
 from pydantic import ValidationError
-from src.contracts import Citation
+from src.contracts import Citation, OutlineEntry
 
 def test_valid_slide_constructs():
     s = Slide(title="Tourniquet application", bullets=["High and tight"],
@@ -37,3 +37,14 @@ def test_sources_default_and_append():
                     section="Background", pages="2-3")
     slide.sources.append(cite)
     assert slide.sources[0].pages == "2-3"
+
+def test_outline_entry_allows_empty_sources():
+    e = OutlineEntry(title="Patient Education", objective="Recognise sepsis at home",
+                     time_minutes=2)
+    assert e.chunk_ids == []
+    assert e.outside_sources == []
+
+def test_outline_entry_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        OutlineEntry(title="t", objective="o", time_minutes=2,
+                     provenance="2020-splenectomy-s4")

@@ -15,3 +15,7 @@ def retrieve(topic, n=10):
         chunks.append({"id": cid, "text": text, "section": meta["section"],
                        "pages": meta["pages"], "source": meta["source"], "distance": dist})
     return chunks
+
+def entry_query(entry):
+    query = f"{entry.title}. {entry.objective}"
+    return query

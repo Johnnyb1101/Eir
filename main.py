@@ -1,9 +1,9 @@
 from src.parser import parse_request
 from src.contracts import Deck, SlideNote, CriticVerdict
 from src.render import render_deck
-from src.agents.outliner import outline_deck
+from src.agents.outliner import outline_deck, classify_entry
 from src.agents.writer import add_sources, write_slide
-from src.retrieve import retrieve
+from src.retrieve import retrieve, entry_query
 from src.agents.critic import critique_slide
 from datetime import datetime
 from src.llm import usage_log
@@ -19,8 +19,14 @@ while True:
     outline = outline_deck(spec, topic_chunks, note)
     print(f"\nProposed outline for '{outline.topic}':")
     for e in outline.entries:
+        c = classify_entry(e, retrieve(entry_query(e)))
         print(f"  {e.time_minutes} min - {e.title}")
         print(f"        {e.objective}")
+        print(f"        [{c['state']}] {', '.join(c['verified']) or 'no chunks'}")
+        for s in e.outside_sources:
+            print(f"        lead (unverified): {s}")
+        if c["fabricated"]:
+            print(f"        !! CLAIMED BUT NOT RETRIEVED: {', '.join(c['fabricated'])}")
     answer = input("\nApprove this outline? (y/n) ")
     if answer.lower() == "y":
         break
@@ -36,7 +42,7 @@ failed_notes = []
 verdicts = []
 attempts = []
 for i, e in enumerate(outline.entries):
-    chunks = retrieve(f"{e.title}. {e.objective}")
+    chunks = retrieve(entry_query(e))
     feedback = None
     slide = None
     for attempt in range(3):

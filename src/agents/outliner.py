@@ -16,6 +16,18 @@ def corpus_view(chunks):
         lines.append(f"- {c['id']}  ({c['section']})")
     return "\n".join(lines)
 
+def classify_entry(entry, chunks):
+    available = {c["id"] for c in chunks}
+    verified = [cid for cid in entry.chunk_ids if cid in available]
+    fabricated = [cid for cid in entry.chunk_ids if cid not in available]
+    if verified and entry.outside_sources:
+        state = "PARTLY SOURCED"
+    elif verified:
+        state = "SOURCED"
+    else:
+        state = "UNSOURCED"
+    return {"state": state, "verified": verified, "fabricated": fabricated}
+
 def outline_deck(spec, chunks, human_feedback=None):
     instructor_note = ""
     if human_feedback:
@@ -27,7 +39,8 @@ def outline_deck(spec, chunks, human_feedback=None):
     for attempt in range(3):
         prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
-objective (string), time_minutes (integer), provenance (string)).
+objective (string), time_minutes (integer), chunk_ids (list of strings),
+outside_sources (list of strings)).
 Return exactly {n_entries} entries, each with time_minutes of 2.
 
 Source material available to the writer:
@@ -36,10 +49,17 @@ Source material available to the writer:
 Design the outline this audience needs. Do not narrow it to fit the list above.
 If the audience needs something these sources do not cover, include it anyway.
 
-For each entry, provenance states where its content comes from.
-If it is built on the source material above, list the chunk IDs you used.
-If the source material does not cover it, say so plainly and name what you
-are drawing on instead - a specific guideline, or your own general knowledge.
+For each entry, chunk_ids lists the IDs above whose content supports it.
+Include an ID only if that chunk genuinely supports the entry.
+
+outside_sources names material you drew on that is NOT in the list above,
+and only material a reader could go and find - a specific guideline or
+publication, by name. Not "general knowledge", which is never findable.
+An empty outside_sources states that this entry rests on the chunks alone.
+Both lists may be empty: that states the entry rests on neither.
+
+chunk_ids will be checked mechanically against the list above.
+outside_sources cannot be checked and goes to a human reviewer as a lead.
 
 Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes} minutes.{instructor_note}{feedback}"""
         try:

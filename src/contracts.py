@@ -26,10 +26,12 @@ class Deck(BaseModel):
     slides: list[Slide] = Field(min_length=1)
 
 class OutlineEntry(BaseModel):
+    model_config = {"extra": "forbid"}
     title: str
     objective: str
     time_minutes: int = Field(gt=0, le=3)
-    provenance: str = Field(min_length=1)
+    chunk_ids: list[str] = []
+    outside_sources: list[str] = []
 
 class Outline(BaseModel):
     topic: str

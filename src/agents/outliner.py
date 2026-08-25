@@ -6,6 +6,11 @@ import json
 SYSTEM = """You are a curriculum designer for military medical training.
 You return ONLY valid JSON - no other text."""
 
+PREVIEW_CHARS = 90
+
+def preview(text):
+    return " ".join(text.split())[:PREVIEW_CHARS]
+
 def sort_key(chunk):
     doc, index = chunk["id"].rsplit("-s", 1)
     return (doc, int(index))
@@ -13,7 +18,7 @@ def sort_key(chunk):
 def corpus_view(chunks):
     lines = []
     for c in sorted(chunks, key=sort_key):
-        lines.append(f"- {c['id']}  ({c['section']})")
+        lines.append(f"- {c['id']}  ({c['section']}) {preview(c['text'])}")
     return "\n".join(lines)
 
 def classify_entry(entry, shown, retrieved):
@@ -47,6 +52,7 @@ outside_sources (list of strings)).
 Return exactly {n_entries} entries, each with time_minutes of 2.
 
 Source material available to the writer:
+Each line is a chunk ID, its section heading in parentheses, and the opening words of that chunk.
 {available}
 
 Design the outline this audience needs. Do not narrow it to fit the list above.

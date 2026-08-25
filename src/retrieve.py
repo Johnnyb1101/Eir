@@ -20,10 +20,10 @@ def document_sections(chunks):
     if not chunks:
         return []
     sources = {c["source"] for c in chunks}
-    hits = collection.get(where={"source": {"$in": sorted(sources)}}, include=["metadatas"])
+    hits = collection.get(where={"source": {"$in": sorted(sources)}}, include=["metadatas", "documents"])
     sections = []
-    for cid, meta in zip(hits["ids"], hits["metadatas"]):
-        sections.append({"id": cid, "section": meta["section"],
+    for cid, text, meta in zip(hits["ids"], hits["documents"], hits["metadatas"]):
+        sections.append({"id": cid, "text": text, "section": meta["section"],
                          "pages": meta["pages"], "source": meta["source"]})
     return sections
 

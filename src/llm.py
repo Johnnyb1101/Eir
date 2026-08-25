@@ -14,7 +14,7 @@ usage_log = []
 def _generate_anthropic(prompt, system):
     reply = client.messages.create(
         model=config["model"],
-        max_tokens=4000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
         system=system
     )

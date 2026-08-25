@@ -16,17 +16,20 @@ def corpus_view(chunks):
         lines.append(f"- {c['id']}  ({c['section']})")
     return "\n".join(lines)
 
-def classify_entry(entry, chunks):
-    available = {c["id"] for c in chunks}
-    verified = [cid for cid in entry.chunk_ids if cid in available]
-    fabricated = [cid for cid in entry.chunk_ids if cid not in available]
-    if verified and entry.outside_sources:
+def classify_entry(entry, shown, retrieved):
+    shown_ids = {c["id"] for c in shown}
+    retrieved_ids = [c["id"] for c in retrieved]
+    fabricated = [cid for cid in entry.chunk_ids if cid not in shown_ids]
+    unmatched = [cid for cid in entry.chunk_ids
+                 if cid in shown_ids and cid not in retrieved_ids]
+    if retrieved and entry.outside_sources:
         state = "PARTLY SOURCED"
-    elif verified:
+    elif retrieved:
         state = "SOURCED"
     else:
         state = "UNSOURCED"
-    return {"state": state, "verified": verified, "fabricated": fabricated}
+    return {"state": state, "retrieved": retrieved_ids,
+            "fabricated": fabricated, "unmatched": unmatched}
 
 def outline_deck(spec, chunks, human_feedback=None):
     instructor_note = ""

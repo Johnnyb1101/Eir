@@ -3,7 +3,7 @@ from src.contracts import Deck, SlideNote, CriticVerdict
 from src.render import render_deck
 from src.agents.outliner import outline_deck, classify_entry
 from src.agents.writer import add_sources, write_slide
-from src.retrieve import retrieve, entry_query
+from src.retrieve import retrieve, entry_query, document_sections
 from src.agents.critic import critique_slide
 from datetime import datetime
 from src.llm import usage_log
@@ -13,20 +13,24 @@ from pydantic import ValidationError
 
 request = input("What training do you need? ")
 spec = parse_request(request)
+print(f"Topic: {spec.topic} | {spec.duration_minutes} min | audience: {spec.audience}")
 note = None
 topic_chunks = retrieve(spec.topic)
+shown_chunks = document_sections(topic_chunks)
 while True:
-    outline = outline_deck(spec, topic_chunks, note)
+    outline = outline_deck(spec, shown_chunks, note)
     print(f"\nProposed outline for '{outline.topic}':")
     for e in outline.entries:
-        c = classify_entry(e, retrieve(entry_query(e)))
+        c = classify_entry(e, shown_chunks, retrieve(entry_query(e)))
         print(f"  {e.time_minutes} min - {e.title}")
         print(f"        {e.objective}")
-        print(f"        [{c['state']}] {', '.join(c['verified']) or 'no chunks'}")
+        print(f"        [{c['state']}] {', '.join(c['retrieved']) or 'no chunks'}")
         for s in e.outside_sources:
             print(f"        lead (unverified): {s}")
         if c["fabricated"]:
-            print(f"        !! CLAIMED BUT NOT RETRIEVED: {', '.join(c['fabricated'])}")
+            print(f"        !! INVENTED ID: {', '.join(c['fabricated'])}")
+        if c["unmatched"]:
+            print(f"        ?? CITED BUT NOT RETRIEVED: {', '.join(c['unmatched'])}")
     answer = input("\nApprove this outline? (y/n) ")
     if answer.lower() == "y":
         break

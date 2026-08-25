@@ -9,6 +9,7 @@ def doc_title(path):
     return Path(path).stem.replace("_", " ")
 
 SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM", "REFERENCES")
+MAX_CHARS= 1200
 
 def is_heading(line):
     return line.strip().isupper()
@@ -88,6 +89,11 @@ def chunk_document(lines):
                            "end_page": page_number,
                            "text": ""})
         elif chunks:
+            if len(chunks[-1]["text"]) + len(line) > MAX_CHARS:
+                chunks.append({"section": chunks[-1]["section"],
+                               "start_page": page_number,
+                               "end_page": page_number,
+                               "text": ""})
             chunks[-1]["text"] += line + "\n"
             chunks[-1]["end_page"] = page_number
     return chunks

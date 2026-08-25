@@ -3,7 +3,7 @@ import chromadb
 client = chromadb.PersistentClient(path="db")
 collection = client.get_or_create_collection("corpus")
 
-MAX_DISTANCE = 1.2
+MAX_DISTANCE = 1.15
 
 def retrieve(topic, n=10):
     hits = collection.query(query_texts=[topic], n_results=n)

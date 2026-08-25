@@ -1,4 +1,4 @@
-from src.ingest import is_heading, clean_heading, keep_chunk, doc_id, doc_title, read_lines, chunk_document, unmatched_toc
+from src.ingest import is_heading, clean_heading, keep_chunk, doc_id, doc_title, read_lines, chunk_document, unmatched_toc, MAX_CHARS
 
 def test_real_headings_are_detected():
     assert is_heading("VACCINE   DOSING ")
@@ -47,3 +47,29 @@ def test_unmatched_toc_entries_are_reported():
     toc = ["PURPOSE", "BACKGROUND", "REFERENCES"]
     headings = {3: "BACKGROUND", 40: "REFERENCES"}
     assert unmatched_toc(toc, headings) == ["PURPOSE"]
+
+def test_a_long_section_is_split_into_several_chunks():
+    lines = [(1, "SECTION ONE ..... 2"), (2, "SECTION ONE")]
+    for i in range(40):
+        lines.append((2, f"unique body line {i} " + "x" * 80))
+    chunks = chunk_document(lines)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk["section"] == "SECTION ONE"
+        assert len(chunk["text"]) <= MAX_CHARS + 1
+
+
+def test_a_short_section_stays_one_chunk():
+    lines = [(1, "SHORT SECTION ..... 2"), (2, "SHORT SECTION"), (2, "one short body line")]
+    assert len(chunk_document(lines)) == 1
+
+
+def test_split_chunks_keep_their_own_page_numbers():
+    lines = [(1, "SECTION ONE ..... 2"), (2, "SECTION ONE")]
+    for i in range(20):
+        lines.append((2, f"page two line {i} " + "x" * 80))
+    for i in range(20):
+        lines.append((3, f"page three line {i} " + "x" * 80))
+    chunks = chunk_document(lines)
+    assert chunks[0]["start_page"] == 2
+    assert chunks[-1]["end_page"] == 3

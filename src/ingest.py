@@ -106,20 +106,30 @@ def keep_chunk(chunk):
             return False
     return True
 
-client = chromadb.PersistentClient(path="db")
-collection = client.get_or_create_collection("corpus")
+STAGING_COLLECTION = "corpus-staging"
+BACKUP_COLLECTION = "corpus-backup"
 
 
 def chunk_meta(pdf, chunk):
     return {"source": doc_title(pdf), "path": str(pdf),
             "section": chunk["section"], "pages": f"{chunk['start_page']}-{chunk['end_page']}"}
 
-if __name__ == "__main__":
-    client.delete_collection("corpus")
-    collection = client.get_or_create_collection("corpus")
+def recover_ingestion(client):
+    names = {collection.name for collection in client.list_collections()}
+    if BACKUP_COLLECTION in names:
+        if "corpus" not in names:
+            client.get_collection(BACKUP_COLLECTION).modify(name="corpus")
+        else:
+            client.delete_collection(BACKUP_COLLECTION)
+    if STAGING_COLLECTION in names:
+        client.delete_collection(STAGING_COLLECTION)
 
+
+def ingest_corpus(client, corpus_path="corpus"):
+    # These names are reserved for ingestion; run ingestion without other writers.
+    recover_ingestion(client)
     ids, texts, metas = [], [], []
-    for pdf in sorted(Path("corpus").glob("*.pdf")):
+    for pdf in sorted(Path(corpus_path).glob("*.pdf")):
         lines = read_lines(pdf)
         headings = find_headings(lines, read_toc(lines))
         for entry in unmatched_toc(read_toc(lines), headings):
@@ -130,5 +140,26 @@ if __name__ == "__main__":
                 texts.append(chunk["text"])
                 metas.append(chunk_meta(pdf, chunk))
 
-    collection.upsert(ids=ids, documents=texts, metadatas=metas)
+    if not ids:
+        raise ValueError("No usable chunks found; existing corpus preserved")
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate chunk IDs found; existing corpus preserved")
+
+    staged = client.create_collection(STAGING_COLLECTION)
+    try:
+        staged.upsert(ids=ids, documents=texts, metadatas=metas)
+        if staged.count() != len(ids):
+            raise ValueError("Staged corpus is incomplete; existing corpus preserved")
+        names = {collection.name for collection in client.list_collections()}
+        if "corpus" in names:
+            client.get_collection("corpus").modify(name=BACKUP_COLLECTION)
+        staged.modify(name="corpus")
+    finally:
+        # Also restores the old name if promotion failed after the first rename.
+        # Recovery errors propagate; rerunning ingestion retries this recovery.
+        recover_ingestion(client)
     print(f"Ingested {len(ids)} chunks")
+
+
+if __name__ == "__main__":
+    ingest_corpus(chromadb.PersistentClient(path="db"))

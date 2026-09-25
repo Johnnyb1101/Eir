@@ -10,6 +10,7 @@ def doc_title(path):
 
 SKIP_HEADINGS = ("TABLE OF CONTENTS", "JOINT TRAUMA SYSTEM", "REFERENCES")
 MAX_CHARS= 1200
+MIN_PAGE_TEXT_CHARS = 500
 
 def is_heading(line):
     return line.strip().isupper()
@@ -18,7 +19,13 @@ def read_lines(path):
     reader = PdfReader(path)
     lines = []
     for page_number, page in enumerate(reader.pages, start=1):
-        for line in page.extract_text().split("\n"):
+        text = page.extract_text() or ""
+        text_chars = len("".join(text.split()))
+        if text_chars < MIN_PAGE_TEXT_CHARS and len(page.images):
+            print(f"  ! {Path(path).name}: PDF page {page_number}, "
+                  f"{text_chars} non-whitespace text characters: "
+                  "possible missing visual content - review original page")
+        for line in text.split("\n"):
             lines.append((page_number, line))
     return lines
 

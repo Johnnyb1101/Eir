@@ -34,9 +34,11 @@ Ollama never causes Eir to fall back to Anthropic.
 `provider` and `model`, independently of ordinary generation. Local visual
 settings replace the whole shared visual mapping, rather than merging its fields.
 
-This release only validates and stores that choice. It does not yet send images,
-interpret PDF visuals, verify model vision capabilities, or add interpretations
-to the corpus. A later visual-extraction implementation will use these settings.
+The selected-page extraction command uses this choice; ordinary ingestion never
+triggers visual AI automatically. See [visual extraction](visual-extraction.md).
+Ollama must report vision capability for the chosen model. Anthropic rejects
+unsupported model/input combinations through its API. Eir never switches models
+or providers automatically. Interpretations are not added to the corpus.
 
 ## Validation limits
 

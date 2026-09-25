@@ -1,17 +1,18 @@
 import json
 import anthropic
-import yaml
 import requests
 from datetime import datetime
+from src.settings import load_config
 
-client = anthropic.Anthropic()
-
-with open("config.yaml") as f:
-    config = yaml.safe_load(f)
+client = None
+config = load_config().model_dump()
 
 usage_log = []
 
 def _generate_anthropic(prompt, system):
+    global client
+    if client is None:
+        client = anthropic.Anthropic()
     reply = client.messages.create(
         model=config["model"],
         max_tokens=8000,
@@ -33,8 +34,12 @@ def _generate_ollama(prompt, system):
             "stream": False,
         },
         timeout=600
-    ).json()
-    return reply ["message"]["content"], reply["prompt_eval_count"], reply["eval_count"]
+    )
+    reply.raise_for_status()
+    data = reply.json()
+    if "error" in data:
+        raise ValueError(f"Ollama request failed: {data['error']}")
+    return data["message"]["content"], data["prompt_eval_count"], data["eval_count"]
 
 def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
              slide_index=None, attempt=None):

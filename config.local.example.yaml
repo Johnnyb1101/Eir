@@ -1,0 +1,16 @@
+# Copy this file to config.local.yaml and choose your installed Ollama model.
+provider: ollama
+model: "YOUR_INSTALLED_OLLAMA_MODEL"
+
+# To use Anthropic instead, replace both values above:
+# provider: anthropic
+# model: "YOUR_ANTHROPIC_MODEL"
+# Set ANTHROPIC_API_KEY in your environment, never in this file.
+
+# Visual extraction is not implemented yet. These settings reserve an
+# independent provider/model choice; null keeps visual processing disabled.
+visual: null
+# Future example (replace visual: null with this block):
+# visual:
+#   provider: ollama
+#   model: "YOUR_INSTALLED_VISION_MODEL"

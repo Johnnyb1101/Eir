@@ -1,96 +1,65 @@
-from src.parser import parse_request
-from src.contracts import Deck, SlideNote, CriticVerdict
-from src.render import render_deck
-from src.agents.outliner import outline_deck, classify_entry
-from src.agents.writer import add_sources, write_slide
-from src.retrieve import retrieve, entry_query, document_sections
-from src.agents.critic import critique_slide
 from datetime import datetime
-from src.llm import usage_log
-import json
-from src.packet import write_packet
-from pydantic import ValidationError
+from pathlib import Path
 
-request = input("What training do you need? ")
-spec = parse_request(request)
-print(f"Topic: {spec.topic} | {spec.duration_minutes} min | audience: {spec.audience}")
-note = None
-topic_chunks = retrieve(spec.topic)
-shown_chunks = document_sections(topic_chunks)
-while True:
-    outline = outline_deck(spec, shown_chunks, note)
-    print(f"\nProposed outline for '{outline.topic}':")
-    for e in outline.entries:
-        c = classify_entry(e, shown_chunks, retrieve(entry_query(e)))
-        print(f"  {e.time_minutes} min - {e.title}")
-        print(f"        {e.objective}")
-        print(f"        [{c['state']}] {', '.join(c['retrieved']) or 'no chunks'}")
-        for s in e.outside_sources:
-            print(f"        lead (unverified): {s}")
-        if c["fabricated"]:
-            print(f"        !! INVENTED ID: {', '.join(c['fabricated'])}")
-        if c["unmatched"]:
-            print(f"        ?? CITED BUT NOT RETRIEVED: {', '.join(c['unmatched'])}")
-    answer = input("\nApprove this outline? (y/n) ")
-    if answer.lower() == "y":
-        break
-    note = input("What needs to change? ")
-    usage_log.append({
-        "agent": "human",
-        "action": "outline_rejected",
-        "note": note,
-        "time": datetime.now().isoformat(timespec="seconds"),
-    })
-slides = []
-failed_notes = []
-verdicts = []
-attempts = []
-for i, e in enumerate(outline.entries):
-    chunks = retrieve(entry_query(e))
-    feedback = None
-    slide = None
-    for attempt in range(3):
-        try:
-            slide = write_slide(e, chunks, feedback, slide_index=i, attempt=attempt + 1)
-        except (ValidationError, json.JSONDecodeError) as err:
-            feedback = [f"Your previous reply was rejected: {err}"]
-            print(f" Attempt {attempt + 1} invalid output")
-            continue
-        grade = critique_slide(slide, e, chunks, slide_index=i, attempt=attempt + 1)
-        usage_log.append({
-            "agent": "verdict",
-            "slide_index": i,
-            "attempt": attempt + 1,
-            "passed": grade.passed,
-            "problems": grade.problems,
-            "time": datetime.now().isoformat(timespec="seconds")
-        })
-        if grade.passed:
-            break
-        feedback = grade.problems
-        print(f"  Attempt {attempt + 1} failed: {grade.problems}")
-    if slide is None:
-        raise ValueError(f"Slide {i} failed contract 3 times - escalating to human review")
-    if not grade.passed:
-        failed_notes.append(SlideNote(slide_index=i, note="; ".join(grade.problems)))
-    add_sources(slide, chunks)
-    verdicts.append(grade)
-    attempts.append(attempt + 1)
-    slides.append(slide)
+from src.llm import capture_usage_log, record_usage
+from src.parser import parse_request
+from src.pipeline import RunArtifacts, build_deck, export_draft, prepare_outline
 
-verdict = CriticVerdict(passed=not failed_notes, notes=failed_notes)
-if not verdict.passed:
-    print("\nFLAGGED FOR HUMAN REVIEW:")
-    for note in verdict.notes:
-        print(f"  Slide {note.slide_index}: {note.note}")
 
-deck = Deck(title=outline.topic, slides=slides)
-stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-render_deck(deck, "output/deck.pptx")
-print(f"Rendered {len(slides)} slides to output/deck.pptx")
+def show_outline(prepared):
+    print(f"\nProposed outline for '{prepared.outline.topic}':")
+    for entry, evidence in zip(prepared.outline.entries, prepared.evidence, strict=True):
+        chunk_ids = ", ".join(chunk.id for chunk in evidence.retrieved)
+        print(f"  {entry.time_minutes} min - {entry.title}")
+        print(f"        {entry.objective}")
+        print(f"        [{evidence.state}] {chunk_ids or 'no chunks'}")
+        for source in entry.outside_sources:
+            print(f"        lead (unverified): {source}")
+        if evidence.fabricated:
+            print(f"        !! INVENTED ID: {', '.join(evidence.fabricated)}")
+        if evidence.unmatched:
+            print(f"        ?? CITED BUT NOT RETRIEVED: {', '.join(evidence.unmatched)}")
 
-with open(f"logs/run_{stamp}.json", "w") as f:
-    json.dump(usage_log, f, indent=2)
 
-write_packet(deck, verdicts, attempts, f"output/review_packet_{stamp}.md")
-print(f"Review packet written to output/review_packet_{stamp}.md")
+def show_retry(attempt, problems):
+    if problems is None:
+        print(f" Attempt {attempt} invalid output")
+    else:
+        print(f"  Attempt {attempt} failed: {problems}")
+
+
+def main():
+    log = []
+    with capture_usage_log(log):
+        request = input("What training do you need? ")
+        spec = parse_request(request)
+        print(f"Topic: {spec.topic} | {spec.duration_minutes} min | audience: {spec.audience}")
+        note = None
+        while True:
+            prepared = prepare_outline(spec, note)
+            show_outline(prepared)
+            if input("\nApprove this outline? (y/n) ").lower() == "y":
+                break
+            note = input("What needs to change? ")
+            record_usage({
+                "agent": "human", "action": "outline_rejected", "note": note,
+                "time": datetime.now().isoformat(timespec="seconds"),
+            })
+        draft = build_deck(prepared, on_retry=show_retry, refresh_sources=True)
+
+    if draft.flags:
+        print("\nFLAGGED FOR HUMAN REVIEW:")
+        for note in draft.flags:
+            print(f"  Slide {note.slide_index}: {note.note}")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    artifacts = RunArtifacts(Path("output/deck.pptx"),
+                             Path(f"output/review_packet_{stamp}.md"),
+                             Path(f"logs/run_{stamp}.json"))
+    export_draft(draft, artifacts, log, on_rendered=lambda: print(
+        f"Rendered {len(draft.deck.slides)} slides to output/deck.pptx"
+    ))
+    print(f"Review packet written to {artifacts.packet.as_posix()}")
+
+
+if __name__ == "__main__":
+    main()

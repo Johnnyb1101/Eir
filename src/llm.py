@@ -2,6 +2,8 @@ import json
 import base64
 import anthropic
 import requests
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from src.settings import load_config
 
@@ -9,6 +11,21 @@ client = None
 config = load_config().model_dump()
 
 usage_log = []
+_active_usage_log = ContextVar("active_usage_log", default=None)
+
+
+@contextmanager
+def capture_usage_log(log):
+    token = _active_usage_log.set(log)
+    try:
+        yield
+    finally:
+        _active_usage_log.reset(token)
+
+
+def record_usage(event):
+    log = _active_usage_log.get()
+    (usage_log if log is None else log).append(event)
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _MAX_VISUAL_BYTES = 4 * 1024 * 1024
@@ -122,7 +139,7 @@ def generate_visual(image_bytes, prompt, schema, system="You return only valid J
         "output_tokens": tokens_out,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
-    usage_log.append({"agent": "visual", **metadata})
+    record_usage({"agent": "visual", **metadata})
     return result, metadata
 
 def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
@@ -134,7 +151,7 @@ def generate(prompt, schema, system="You return only valid JSON.", agent="unknow
     else:
         raise ValueError(f"Unknown provider: {config['provider']}")
     
-    usage_log.append({
+    record_usage({
         "agent": agent,
         "slide_index": slide_index,
         "attempt": attempt,

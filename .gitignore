@@ -6,6 +6,7 @@ venv/
 logs/
 output/
 .env
+config.local.yaml
 __pycache__/
 sandbox.py
 corpus/

@@ -5,8 +5,9 @@ collection = client.get_or_create_collection("corpus")
 
 MAX_DISTANCE = 1.15
 
-def retrieve(topic, n=10):
-    hits = collection.query(query_texts=[topic], n_results=n)
+def retrieve(topic, n=10, *, source=None):
+    filters = {"where": {"source": source}} if source is not None else {}
+    hits = collection.query(query_texts=[topic], n_results=n, **filters)
     chunks = []
     for cid, text, meta, dist in zip(hits["ids"][0], hits["documents"][0],
                                      hits["metadatas"][0], hits["distances"][0]):

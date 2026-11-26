@@ -48,6 +48,7 @@ def check_citations(slide, chunks):
             raise ValueError(f"Slide cites {cite}, which was not received")
         
 def add_sources(slide, chunks):
+    slide.sources = []
     for cite in slide.citations:
         for chunk in chunks:
             if chunk["id"] == cite:

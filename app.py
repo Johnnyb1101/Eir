@@ -67,6 +67,10 @@ def show_outline(snapshot) -> None:
         with st.container(border=True):
             st.text(f"{index + 1}. {entry.title} · {entry.time_minutes} min")
             st.text(entry.objective)
+            if entry.required_points:
+                st.text("Required points to cover")
+                for point in entry.required_points:
+                    st.text(f"• {point}")
             evidence = snapshot.sources[index] if index < len(snapshot.sources) else None
             if evidence is not None or entry.outside_sources:
                 label = RETRIEVAL_STATUS.get(evidence.state, "Source details") if evidence else "Outside source leads"

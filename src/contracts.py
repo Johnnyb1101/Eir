@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import Literal
 
 class RequestSpec(BaseModel):
@@ -31,9 +31,20 @@ class OutlineEntry(BaseModel):
     model_config = {"extra": "forbid"}
     title: str
     objective: str
+    required_points: list[str] = Field(default_factory=list)
     time_minutes: int = Field(gt=0, le=3)
     chunk_ids: list[str] = []
     outside_sources: list[str] = []
+
+    @field_validator("required_points")
+    @classmethod
+    def valid_required_points(cls, points: list[str]) -> list[str]:
+        cleaned = [point.strip() for point in points]
+        if any(not point for point in cleaned):
+            raise ValueError("Required points must contain substantive text")
+        if len({point.casefold() for point in cleaned}) != len(cleaned):
+            raise ValueError("Required points must be distinct")
+        return cleaned
 
 class Outline(BaseModel):
     topic: str

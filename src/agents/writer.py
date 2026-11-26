@@ -35,6 +35,11 @@ def write_slide(entry, chunks, feedback=None, slide_index=None, attempt=None):
     citations (list of strings)
 
 Title: {entry.title}. Objective: {entry.objective}. Duration: time_minutes must be exactly {entry.time_minutes}. Source chunks: {sources}"""
+    if entry.required_points:
+        points = "\n".join(f"- {point}" for point in entry.required_points)
+        prompt += f"\nTeach every required point in the bullets or speaker notes:\n{points}"
+    prompt += ("\nKeep source qualifications in the actual bullet or note that makes the claim. "
+               "Avoid shorthand that states a diagnosis or recommendation more strongly than the evidence.")
     if enriched:
         prompt += ("\nThe primary CPG chunks establish clinical recommendations and take precedence. "
                    "When primary CPG chunks are supplied, include and cite a relevant point from them. "

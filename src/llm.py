@@ -30,18 +30,31 @@ def record_usage(event):
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _MAX_VISUAL_BYTES = 4 * 1024 * 1024
 
-def _generate_anthropic(prompt, system):
+
+class IncompleteReply(ValueError):
+    pass
+
+
+def _generate_anthropic(prompt, system, *, response_schema=None):
     global client
     if client is None:
         client = anthropic.Anthropic()
-    reply = client.messages.create(
-        model=config["model"],
-        max_tokens=8000,
-        messages=[{"role": "user", "content": prompt}],
-        system=system
-    )
+    options = {"max_tokens": 8000}
+    if response_schema is not None:
+        output = {"format": {"type": "json_schema", "schema": anthropic.transform_schema(response_schema)}}
+        # Sonnet 5 counts thinking against the output limit and defaults to high effort.
+        if config["model"] == "claude-sonnet-5":
+            output["effort"] = "medium"
+        options = {"max_tokens": 16000, "output_config": output}
+    reply = client.messages.create(model=config["model"], messages=[{"role": "user", "content": prompt}],
+                                   system=system, **options)
     if reply.stop_reason == "max_tokens":
-        raise ValueError("Reply truncated by max_tokens cap - raise the limit")
+        raise IncompleteReply("Reply truncated by max_tokens cap - raise the limit")
+    if response_schema is not None and reply.stop_reason != "end_turn":
+        raise IncompleteReply("Structured reply did not complete")
+    if response_schema is not None:
+        text = "".join(block.text for block in reply.content if block.type == "text")
+        return text, reply.usage.input_tokens, reply.usage.output_tokens
     text = next(b.text for b in reply.content if b.type == "text")
     return text, reply.usage.input_tokens, reply.usage.output_tokens
 
@@ -146,9 +159,10 @@ def generate_visual(image_bytes, prompt, schema, system="You return only valid J
     return result, metadata
 
 def generate(prompt, schema, system="You return only valid JSON.", agent="unknown",
-             slide_index=None, attempt=None):
+             slide_index=None, attempt=None, *, structured=False):
     if config["provider"] == "anthropic":
-        text, tokens_in, tokens_out = _generate_anthropic(prompt, system)
+        options = {"response_schema": schema} if structured else {}
+        text, tokens_in, tokens_out = _generate_anthropic(prompt, system, **options)
     elif config["provider"] == "ollama":
         text, tokens_in, tokens_out = _generate_ollama(prompt, system)
     else:
@@ -162,5 +176,6 @@ def generate(prompt, schema, system="You return only valid JSON.", agent="unknow
         "output_tokens": tokens_out,
         "time": datetime.now().isoformat(timespec="seconds"),
     })
-    data = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    exact_json = structured and config["provider"] == "anthropic"
+    data = json.loads(text if exact_json else text[text.find("{") : text.rfind("}") + 1])
     return schema.model_validate(data)

@@ -12,6 +12,8 @@ class Citation(BaseModel):
     source: str
     section: str
     pages: str
+    kind: Literal["primary", "supplemental"] = "primary"
+    url: str | None = None
 
 class Slide(BaseModel):
     title: str

@@ -10,10 +10,11 @@ from uuid import uuid4
 
 from src.contracts import Outline, RequestSpec, SlideNote
 from src.pipeline import (
-    OutlineEvidence, PreparedOutline, RunArtifacts, build_deck, export_draft,
+    OutlineEvidence, PreparedOutline, RunArtifacts, attach_supplemental, build_deck, export_draft,
     prepare_outline, write_run_log,
 )
 from src.source_pdf import SelectedPdf, SourcePdfError, read_selected_pdf
+from src.supplemental import find_supplemental_sources, validate_reference_url
 from src.visual_extract import PageReview, review_extracted_page
 
 
@@ -41,6 +42,8 @@ class RunSnapshot:
     reviewing_page: int | None = None
     visual_message: str | None = None
     visual_reviews: tuple[PageReview, ...] = ()
+    supplementing_slide: int | None = None
+    supplemental_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,7 @@ class RunManager:
             run.log.append(_event("human", "outline_rejected", note=feedback, revision=revision))
             run.prepared = None
             run.snapshot = replace(run.snapshot, status="outlining", revision=revision + 1,
-                                   outline=None, sources=(), total_slides=0,
+                                   outline=None, sources=(), total_slides=0, supplemental_message=None,
                                    message="Revising the outline.")
             self._executor.submit(self._outline, run, feedback)
 
@@ -158,6 +161,20 @@ class RunManager:
                                    visual_message=f"Checking PDF page {page_number} against extracted text.")
             self._executor.submit(self._review, run, page_number)
 
+    def find_references(self, run_id, revision, slide_number, reference_url=""):
+        from src.llm import config
+
+        with self._lock:
+            run = self._awaiting(run_id, revision)
+            if run.selected_source is None or config["provider"] != "anthropic":
+                raise RunConflict("Select an original PDF and configure Anthropic to look up references.")
+            if type(slide_number) is not int or not 1 <= slide_number <= run.snapshot.total_slides:
+                raise RunConflict(f"Choose a slide from 1 to {run.snapshot.total_slides}.")
+            url = validate_reference_url(reference_url)
+            run.snapshot = replace(run.snapshot, supplementing_slide=slide_number,
+                                   supplemental_message=f"Looking for references for slide {slide_number}.")
+            self._executor.submit(self._find_references, run, slide_number, url)
+
     def _get(self, run_id):
         if self._current is None or self._current.snapshot.id != run_id:
             raise KeyError(run_id)
@@ -172,6 +189,8 @@ class RunManager:
             raise RunConflict("The outline has changed or was already acted on. Refresh and review it again.")
         if run.snapshot.reviewing_page is not None:
             raise RunConflict("Wait for the active visual check to finish.")
+        if run.snapshot.supplementing_slide is not None:
+            raise RunConflict("Wait for the active reference lookup to finish.")
         return run
 
     def _outline(self, run, feedback):
@@ -225,6 +244,39 @@ class RunManager:
             run.snapshot = replace(run.snapshot, reviewing_page=None,
                                    visual_reviews=tuple(reviews[number] for number in sorted(reviews)),
                                    visual_message=f"Unreviewed findings are ready for PDF page {page_number}.")
+
+    def _find_references(self, run, slide_number, reference_url):
+        from src.llm import capture_usage_log
+
+        slide_index = slide_number - 1
+        entry = run.prepared.outline.entries[slide_index]
+        try:
+            with capture_usage_log(run.log):
+                result = find_supplemental_sources(entry, reference_url=reference_url)
+            prepared = attach_supplemental(run.prepared, slide_index, result)
+        except Exception as error:
+            kind = type(error).__name__
+            _LOGGER.error("Reference lookup failed for Eir run %s slide %s (%s)",
+                          run.snapshot.id, slide_number, kind)
+            run.log.append(_event("eir", "supplemental_lookup_failed", slide_number=slide_number, error_type=kind))
+            with self._lock:
+                run.snapshot = replace(run.snapshot, supplementing_slide=None,
+                                       supplemental_message=f"Reference lookup for slide {slide_number} failed ({kind}).")
+            return
+
+        run.log.append(_event("eir", "supplemental_lookup", slide_number=slide_number,
+                              revision=run.snapshot.revision, reference_url=reference_url, chunks=result.chunks,
+                              leads=result.leads, errors=result.errors))
+        if result.chunks:
+            message = f"Verified evidence for slide {slide_number} is ready to review."
+        elif result.errors:
+            message = f"Reference lookup for slide {slide_number} was incomplete. Try again or approve the outline."
+        else:
+            message = f"No source excerpts could be verified for slide {slide_number}."
+        with self._lock:
+            run.prepared = prepared
+            run.snapshot = replace(run.snapshot, sources=prepared.evidence, revision=run.snapshot.revision + 1,
+                                   supplementing_slide=None, supplemental_message=message)
 
     def _generate(self, run):
         def update_progress(completed, flag):

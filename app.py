@@ -74,6 +74,15 @@ def show_outline(snapshot) -> None:
                     if evidence is not None:
                         for source in evidence.retrieved:
                             st.text(f"{source.source} · {source.section} · p. {source.pages}")
+                        for source in evidence.supplemental:
+                            location = f"{source.section} · PDF page {source.pages}" if source.pages else source.section
+                            st.text(f"Verified supplemental excerpt · {source.source} · {location}")
+                            if source.excerpt:
+                                st.text(source.excerpt)
+                            if source.url:
+                                st.link_button("Open supplemental reference", source.url)
+                        for lead in evidence.supplemental_leads:
+                            st.text(f"Unverified supplemental lead · {lead}")
                         if evidence.fabricated:
                             st.text("Unverified reference IDs · " + ", ".join(evidence.fabricated))
                         if evidence.unmatched:
@@ -84,12 +93,41 @@ def show_outline(snapshot) -> None:
                             st.text(lead)
 
 
+def review_in_progress(snapshot) -> bool:
+    return snapshot.reviewing_page is not None or snapshot.supplementing_slide is not None
+
+
+def show_supplemental_lookup(manager: RunManager, snapshot, provider) -> None:
+    if snapshot.status != "awaiting_approval" or snapshot.source_extractor is None or provider != "anthropic":
+        return
+    st.subheader("Supplemental references")
+    st.caption("Anthropic uses the slide’s title, objective, and any public reference URL you enter. The CPG remains primary.")
+    if snapshot.supplemental_message:
+        st.text(snapshot.supplemental_message)
+    busy = review_in_progress(snapshot)
+    with st.form(f"supplemental-{snapshot.id}-{snapshot.revision}"):
+        slide = st.selectbox(
+            "Slide to supplement", range(1, snapshot.total_slides + 1),
+            format_func=lambda number: f"{number}. {snapshot.outline.entries[number - 1].title}",
+            disabled=busy,
+        )
+        reference_url = st.text_input("Reference URL (optional)", max_chars=500, disabled=busy)
+        requested = st.form_submit_button("Find supplemental references", disabled=busy)
+    if requested:
+        try:
+            manager.find_references(snapshot.id, snapshot.revision, slide, reference_url)
+        except (RunConflict, KeyError, ValueError) as error:
+            show_error(error)
+            return
+        st.rerun()
+
+
 def show_review(manager: RunManager, snapshot) -> None:
     if snapshot.status != "awaiting_approval":
         return
     st.subheader("Review decision")
     st.caption("Approval starts slide generation. Revision asks for a new outline. Discard closes this run.")
-    checking_page = snapshot.reviewing_page is not None
+    busy = review_in_progress(snapshot)
     with st.form(f"review-{snapshot.id}-{snapshot.revision}"):
         feedback = st.text_area(
             "Revision feedback",
@@ -99,13 +137,13 @@ def show_review(manager: RunManager, snapshot) -> None:
         approve, revise, discard = st.columns(3)
         with approve:
             approved = st.form_submit_button("Approve outline", type="primary", use_container_width=True,
-                                             disabled=checking_page)
+                                             disabled=busy)
         with revise:
             revised = st.form_submit_button("Request revision", use_container_width=True,
-                                            disabled=checking_page)
+                                            disabled=busy)
         with discard:
             discarded = st.form_submit_button("Discard run", use_container_width=True,
-                                             disabled=checking_page)
+                                             disabled=busy)
     try:
         if approved:
             manager.approve(snapshot.id, snapshot.revision)
@@ -157,13 +195,14 @@ def show_visual_review(manager: RunManager, snapshot, visual_config) -> None:
             st.caption("Anthropic receives the rendered page image and extracted page text.")
         elif visual_config["provider"] == "ollama":
             st.caption("Ollama processes the page image and extracted page text locally.")
+    disabled = visual_config is None or review_in_progress(snapshot)
     with st.form(f"page-check-{snapshot.id}-{snapshot.revision}"):
         page_number = st.number_input(
             "Original PDF page number", min_value=1, max_value=snapshot.source_pages,
-            value=1, step=1, disabled=visual_config is None or snapshot.reviewing_page is not None,
+            value=1, step=1, disabled=disabled,
         )
         requested = st.form_submit_button(
-            "Check this page", disabled=visual_config is None or snapshot.reviewing_page is not None,
+            "Check this page", disabled=disabled,
         )
     if requested:
         try:
@@ -174,7 +213,7 @@ def show_visual_review(manager: RunManager, snapshot, visual_config) -> None:
         st.rerun()
 
 
-def show_run(manager: RunManager, run_id: str, visual_config) -> None:
+def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
     try:
         snapshot = manager.snapshot(run_id)
     except KeyError:
@@ -199,6 +238,7 @@ def show_run(manager: RunManager, run_id: str, visual_config) -> None:
         )
     if snapshot.status == "awaiting_approval":
         show_outline(snapshot)
+        show_supplemental_lookup(manager, snapshot, provider)
     show_visual_review(manager, snapshot, visual_config)
     if snapshot.status == "awaiting_approval":
         show_review(manager, snapshot)
@@ -318,12 +358,12 @@ if selected_id:
     if active_id == selected_id:
         @st.fragment(run_every="2s")
         def live_run_panel() -> None:
-            show_run(manager, selected_id, config.get("visual"))
+            show_run(manager, selected_id, config.get("visual"), config["provider"])
             if manager.active_id() != selected_id:
                 st.rerun()
 
         live_run_panel()
     else:
-        show_run(manager, selected_id, config.get("visual"))
+        show_run(manager, selected_id, config.get("visual"), config["provider"])
 
 history_panel(manager)

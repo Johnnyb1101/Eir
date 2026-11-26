@@ -3,6 +3,7 @@ def write_packet(deck, verdicts, attempts, path, *, selected_source=None, visual
         raise ValueError(f"{len(deck.slides)} slides but {len(verdicts)} verdicts")
     if len(deck.slides) != len(attempts):
         raise ValueError(f"{len(deck.slides)} slides but {len(attempts)} attempt counts")
+    enriched = any(c.kind == "supplemental" for slide in deck.slides for c in slide.sources)
     lines = []
     lines.append(f"# Review Packet: {deck.title}")
     lines.append("")
@@ -36,7 +37,16 @@ def write_packet(deck, verdicts, attempts, path, *, selected_source=None, visual
         lines.append("")
         lines.append("**Citations:**")
         for c in slide.sources:
-            lines.append(f"- {c.source}, {c.section}, {c.pages}")
+            if not enriched:
+                lines.append(f"- {c.source}, {c.section}, {c.pages}")
+                continue
+            label = "Supplemental source" if c.kind == "supplemental" else "Primary CPG"
+            location = f"{c.source}, {c.section}"
+            if c.pages:
+                location += f", {c.pages}"
+            if c.url:
+                location += f" ([source link]({c.url}))"
+            lines.append(f"- {label}: {location}")
         if verdict.passed:
             lines.append(f"**Verdict:** PASS (attempts: {attempts[i]})")
         else:

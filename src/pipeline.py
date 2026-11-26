@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -14,6 +14,8 @@ class EvidenceSource:
     source: str
     section: str
     pages: str
+    url: str | None = None
+    excerpt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,8 @@ class OutlineEvidence:
     retrieved: tuple[EvidenceSource, ...]
     fabricated: tuple[str, ...]
     unmatched: tuple[str, ...]
+    supplemental: tuple[EvidenceSource, ...] = ()
+    supplemental_leads: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,23 @@ def _prepare_evidence(outline, shown, evidence_for, *, pinned_source=False):
             tuple(classification["unmatched"]),
         ))
     return PreparedOutline(outline, tuple(evidence), entry_chunks, pinned_source)
+
+
+def attach_supplemental(prepared, slide_index, result):
+    evidence = list(prepared.evidence)
+    chunks = list(prepared.chunks)
+    selected = evidence[slide_index]
+    if result.chunks:
+        # Each successful lookup replaces the previous supplement for this slide.
+        primary = [chunk for chunk in chunks[slide_index] if chunk.get("kind") != "supplemental"]
+        chunks[slide_index] = [*primary, *result.chunks]
+        selected = replace(selected, supplemental=tuple(
+            EvidenceSource(chunk["id"], chunk["source"], chunk["section"], chunk["pages"],
+                           url=chunk["url"], excerpt=chunk["text"])
+            for chunk in result.chunks
+        ))
+    evidence[slide_index] = replace(selected, supplemental_leads=result.leads)
+    return replace(prepared, evidence=tuple(evidence), chunks=tuple(chunks))
 
 
 def build_deck(prepared, *, on_retry=None, on_slide=None, refresh_sources=False):

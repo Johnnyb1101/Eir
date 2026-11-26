@@ -83,6 +83,7 @@ def generate_visual(image_bytes, prompt, schema, system="You return only valid J
             model=model,
             max_tokens=8000,
             system=system,
+            output_config={"format": {"type": "json_schema", "schema": anthropic.transform_schema(schema)}},
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                               "data": encoded_image}},
@@ -91,6 +92,8 @@ def generate_visual(image_bytes, prompt, schema, system="You return only valid J
         )
         if reply.stop_reason == "max_tokens":
             raise ValueError("Visual reply truncated by max_tokens cap")
+        if reply.stop_reason == "refusal":
+            raise ValueError("Anthropic refused the visual request")
         text = "".join(block.text for block in reply.content if block.type == "text")
         if not text.strip():
             raise ValueError("Visual reply has no text content")

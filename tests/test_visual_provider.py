@@ -82,6 +82,11 @@ def test_anthropic_uses_independent_visual_model_and_logs_metadata(monkeypatch):
     assert kwargs["model"] == "vision-model"
     assert kwargs["max_tokens"] == 8000
     assert kwargs["system"] == "JSON only"
+    assert kwargs["output_config"] == {"format": {"type": "json_schema", "schema": {
+        "type": "object", "title": "Answer", "required": ["found"],
+        "properties": {"found": {"type": "boolean", "title": "Found"}},
+        "additionalProperties": False,
+    }}}
     content = kwargs["messages"][0]["content"]
     assert content[0]["source"]["media_type"] == "image/png"
     assert base64.b64decode(content[0]["source"]["data"]) == PNG
@@ -98,6 +103,7 @@ def test_anthropic_uses_independent_visual_model_and_logs_metadata(monkeypatch):
 
 @pytest.mark.parametrize("reply, error", [
     (anthropic_reply(stop_reason="max_tokens"), "truncated"),
+    (anthropic_reply(stop_reason="refusal"), "refused"),
     (anthropic_reply(text=""), "no text"),
 ])
 def test_anthropic_rejects_incomplete_reply(monkeypatch, reply, error):

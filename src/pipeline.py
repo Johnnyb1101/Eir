@@ -168,6 +168,37 @@ def build_deck(prepared, *, on_retry=None, on_slide=None, refresh_sources=False)
     return DeckDraft(Deck(title=prepared.outline.topic, slides=slides), grades, attempts, tuple(flags))
 
 
+def repair_draft_slide(draft, entry, slide_index, chunks, *, correction, attempt):
+    from src.agents.critic import critique_slide
+    from src.agents.writer import add_sources, write_slide
+
+    primary_ids = {chunk["id"] for chunk in chunks if chunk.get("kind") != "supplemental"}
+    if not primary_ids:
+        return None, SlideGrade(passed=False, problems=["Add a relevant primary CPG page to repair this slide."])
+
+    slide = write_slide(entry, chunks, draft.grades[slide_index].problems,
+                        slide_index=slide_index, attempt=attempt,
+                        current_slide=draft.deck.slides[slide_index], correction=correction)
+    if slide.time_minutes != entry.time_minutes or not any(bullet.strip() for bullet in slide.bullets):
+        return None, SlideGrade(passed=False, problems=["The revision must keep the approved timing and include slide content."])
+    if not primary_ids.intersection(slide.citations):
+        return None, SlideGrade(passed=False, problems=["The revision needs a citation to the primary CPG."])
+
+    grade = critique_slide(slide, entry, chunks, slide_index=slide_index, attempt=attempt)
+    if not grade.passed:
+        return None, grade
+
+    add_sources(slide, chunks)
+    slides = draft.deck.slides.copy()
+    slides[slide_index] = slide
+    grades = draft.grades.copy()
+    grades[slide_index] = grade
+    attempts = draft.attempts.copy()
+    attempts[slide_index] = attempt
+    flags = tuple(flag for flag in draft.flags if flag.slide_index != slide_index)
+    return DeckDraft(draft.deck.model_copy(update={"slides": slides}), grades, attempts, flags), grade
+
+
 def write_run_log(path, log):
     path.write_text(json.dumps(log, indent=2), encoding="utf-8")
 

@@ -48,8 +48,15 @@ def outline_deck(spec, chunks, human_feedback=None):
         prompt = f"""Design a slide outline as JSON with keys:
 topic (string), entries (list of objects, each with: title (string),
 objective (string), time_minutes (integer), chunk_ids (list of strings),
-outside_sources (list of strings)).
+outside_sources (list of strings), required_points (list of strings)).
 Return exactly {n_entries} entries, each with time_minutes of 2.
+
+For every entry, required_points must contain at least one explicit, checkable
+content point the slide must cover. Keep separate facts or decisions as separate
+points so each can be assessed independently. State distinct, substantive terms
+explicitly, and include an acronym expansion when the title or objective implies it.
+Do not repeat the objective as a point or use vague instructions such as
+"discuss the topic".
 
 Source material available to the writer:
 Each line is a chunk ID, its section heading in parentheses, and the opening words of that chunk.
@@ -76,8 +83,15 @@ Topic: {spec.topic}. Audience: {spec.audience}. Duration: {spec.duration_minutes
         except (ValidationError, json.JSONDecodeError) as err:
             feedback = f"\nYour previous reply was rejected: {err}"
             continue
+        missing_points = [index + 1 for index, entry in enumerate(outline.entries)
+                          if not entry.required_points]
+        if missing_points:
+            feedback = ("\nYour previous outline omitted required_points for entries "
+                        f"{missing_points}. Include at least one explicit, checkable "
+                        "point for every entry.")
+            continue
         total = sum(e.time_minutes for e in outline.entries)
         if abs(total - spec.duration_minutes) <= 1:
             return outline
         feedback = f"\nYour previous outline summed to {total} minutes. It must sum to {spec.duration_minutes}."
-    raise ValueError(f"Outline failed timing check 3 times - escalating to human review")
+    raise ValueError("Outline failed timing or required-points check 3 times - escalating to human review")

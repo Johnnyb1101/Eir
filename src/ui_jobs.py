@@ -10,8 +10,8 @@ from uuid import uuid4
 
 from src.contracts import Outline, RequestSpec, SlideNote
 from src.pipeline import (
-    OutlineEvidence, PreparedOutline, RunArtifacts, attach_supplemental, build_deck, export_draft,
-    prepare_outline, write_run_log,
+    DeckDraft, OutlineEvidence, PreparedOutline, RunArtifacts, attach_supplemental, build_deck, export_draft,
+    prepare_outline, repair_draft_slide, write_run_log,
 )
 from src.source_pdf import SelectedPdf, SourcePdfError, read_selected_pdf
 from src.supplemental import find_supplemental_sources, validate_reference_url
@@ -44,6 +44,9 @@ class RunSnapshot:
     visual_reviews: tuple[PageReview, ...] = ()
     supplementing_slide: int | None = None
     supplemental_message: str | None = None
+    repairing_slide: int | None = None
+    repair_message: str | None = None
+    repair_findings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,9 +67,10 @@ class _Run:
     prepared: PreparedOutline | None = None
     source_path: Path | None = None
     selected_source: SelectedPdf | None = None
+    draft: DeckDraft | None = None
 
 
-_ACTIVE = {"outlining", "awaiting_approval", "generating"}
+_ACTIVE = {"outlining", "awaiting_approval", "generating", "repairing"}
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -174,6 +178,47 @@ class RunManager:
             run.snapshot = replace(run.snapshot, supplementing_slide=slide_number,
                                    supplemental_message=f"Looking for references for slide {slide_number}.")
             self._executor.submit(self._find_references, run, slide_number, url)
+
+    def repair_slide(self, run_id, revision, slide_number, feedback="", *, page_numbers=(), reference_url=""):
+        from src.llm import config
+
+        with self._lock:
+            try:
+                run = self._get(run_id)
+            except KeyError:
+                raise RunConflict("This run is no longer current.") from None
+            snapshot = run.snapshot
+            if snapshot.status != "completed" or snapshot.revision != revision or run.draft is None:
+                raise RunConflict("Refresh the current run before requesting a slide repair.")
+            if type(slide_number) is not int or all(flag.slide_index != slide_number - 1 for flag in snapshot.flags):
+                raise RunConflict("Choose a slide that still needs review.")
+            if len(page_numbers) > 3 or any(type(number) is not int for number in page_numbers):
+                raise RunConflict("Choose up to three PDF pages by number.")
+            if page_numbers and run.selected_source is None:
+                raise RunConflict("Additional pages require a selected CPG PDF.")
+            url = validate_reference_url(reference_url)
+            if url and (run.selected_source is None or config["provider"] != "anthropic"):
+                raise RunConflict("Reference lookup requires a selected CPG PDF and Anthropic.")
+
+            chunks = list(run.prepared.chunks[slide_number - 1])
+            pages = {page.number: page for page in run.selected_source.pages} if page_numbers else {}
+            for number in page_numbers:
+                if number not in pages:
+                    raise RunConflict(f"PDF page {number} is unavailable as extracted text.")
+                chunks.append(run.selected_source.as_evidence(pages[number]))
+
+            correction = feedback.strip()
+            attempt = run.draft.attempts[slide_number - 1] + 1 + sum(
+                event.get("action") == "slide_repair_requested" and event["slide_number"] == slide_number
+                for event in run.log
+            )
+            run.log.append(_event("human", "slide_repair_requested", slide_number=slide_number,
+                                  note=correction, added_pages=list(page_numbers), reference_url=url,
+                                  revision=revision + 1, attempt=attempt))
+            run.snapshot = replace(snapshot, status="repairing", revision=revision + 1,
+                                   repairing_slide=slide_number, repair_findings=(), repair_message=None,
+                                   message=f"Fixing and re-reviewing slide {slide_number}.")
+            self._executor.submit(self._repair, run, slide_number, chunks, correction, url, attempt)
 
     def _get(self, run_id):
         if self._current is None or self._current.snapshot.id != run_id:
@@ -308,10 +353,80 @@ class RunManager:
             self._fail(run, stage, error)
             return
         with self._lock:
-            run.prepared = None
-            run.selected_source = None
+            self._keep_repair_context(run, draft)
             run.snapshot = replace(run.snapshot, status="completed", message="Draft files are ready.",
                                    artifacts=artifacts, flags=draft.flags)
+
+    @staticmethod
+    def _keep_repair_context(run, draft):
+        run.draft = draft if draft.flags else None
+        if run.draft is None:
+            run.prepared = None
+            run.selected_source = None
+
+    def _repair(self, run, slide_number, chunks, correction, reference_url, attempt):
+        from src.llm import capture_usage_log
+
+        index = slide_number - 1
+        entry = run.prepared.outline.entries[index]
+        stage = "reviewing the revision"
+        try:
+            with capture_usage_log(run.log):
+                if reference_url:
+                    stage = "verifying the reference"
+                    references = find_supplemental_sources(entry, reference_url=reference_url)
+                    run.log.append(_event("eir", "repair_reference_lookup", slide_number=slide_number,
+                                          chunks=references.chunks, leads=references.leads, errors=references.errors))
+                    if not references.chunks:
+                        self._repair_rejected(run, slide_number, ("No supplemental excerpts could be verified. Try another reference or CPG page.",))
+                        return
+                    chunks.extend(references.chunks)
+                stage = "reviewing the revision"
+                evidence = {chunk["id"]: chunk for chunk in chunks}
+                ordered = sorted(evidence.values(), key=lambda chunk: chunk.get("kind") == "supplemental")
+                draft, grade = repair_draft_slide(run.draft, entry, index, ordered,
+                                                 correction=correction, attempt=attempt)
+            run.log.append(_event("eir", "slide_repair_reviewed", slide_number=slide_number, attempt=attempt,
+                                  passed=grade.passed, problems=grade.problems))
+            if draft is None:
+                self._repair_rejected(run, slide_number, grade.problems)
+                return
+
+            stage = "saving the revised files"
+            directory = run.directory.with_name(f"{run.directory.name}-repair-{run.snapshot.revision}")
+            audit = [*run.log, _event("verdict", "slide_repaired", slide_index=index, attempt=attempt,
+                                      passed=True, problems=[], previous_bundle=run.snapshot.artifacts.deck.parent.name,
+                                      primary_pages=[chunk["pages"] for chunk in ordered
+                                                     if chunk.get("kind") != "supplemental"])]
+            with TemporaryDirectory(dir=run.directory) as staging:
+                bundle = Path(staging) / "bundle"
+                bundle.mkdir()
+                export_draft(draft, _paths(bundle), audit, selected_source=run.selected_source,
+                             visual_reviews=run.snapshot.visual_reviews)
+                bundle.rename(directory)
+        except Exception as error:
+            kind = type(error).__name__
+            _LOGGER.error("Slide repair failed for Eir run %s slide %s while %s (%s)",
+                          run.snapshot.id, slide_number, stage, kind)
+            self._repair_rejected(run, slide_number, (f"Eir stopped while {stage} ({kind}).",))
+            return
+
+        with self._lock:
+            run.log = audit
+            self._keep_repair_context(run, draft)
+            run.snapshot = replace(run.snapshot, status="completed", artifacts=_paths(directory),
+                                   flags=draft.flags, repairing_slide=None,
+                                   message="Revised draft files are ready.",
+                                   repair_message=f"Slide {slide_number} passed re-review. Revised files are ready.")
+
+    def _repair_rejected(self, run, slide_number, problems):
+        run.log.append(_event("eir", "slide_repair_rejected", slide_number=slide_number, problems=list(problems)))
+        self._save_partial_log(run)
+        with self._lock:
+            run.snapshot = replace(run.snapshot, status="completed", repairing_slide=None,
+                                   message="Current draft files are ready.",
+                                   repair_message=f"Slide {slide_number} was not replaced.",
+                                   repair_findings=tuple(problems))
 
     def _save_partial_log(self, run):
         try:

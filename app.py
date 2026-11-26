@@ -67,6 +67,10 @@ def show_outline(snapshot) -> None:
         with st.container(border=True):
             st.text(f"{index + 1}. {entry.title} · {entry.time_minutes} min")
             st.text(entry.objective)
+            if entry.required_points:
+                st.text("Required points to cover")
+                for point in entry.required_points:
+                    st.text(f"• {point}")
             evidence = snapshot.sources[index] if index < len(snapshot.sources) else None
             if evidence is not None or entry.outside_sources:
                 label = RETRIEVAL_STATUS.get(evidence.state, "Source details") if evidence else "Outside source leads"
@@ -213,6 +217,60 @@ def show_visual_review(manager: RunManager, snapshot, visual_config) -> None:
         st.rerun()
 
 
+def show_slide_repair(manager: RunManager, snapshot, provider) -> None:
+    if snapshot.status not in {"completed", "repairing"} or snapshot.artifacts is None:
+        return
+    if snapshot.repair_message:
+        st.text(snapshot.repair_message)
+    if snapshot.repair_findings:
+        st.markdown("**Repair review findings**")
+        for finding in snapshot.repair_findings:
+            st.text(finding)
+    if snapshot.status == "repairing" or not snapshot.flags:
+        return
+
+    flagged_slides = sorted({flag.slide_index + 1 for flag in snapshot.flags})
+    selected_pdf = snapshot.source_extractor is not None
+
+    def slide_label(number):
+        if snapshot.outline is None:
+            return f"Slide {number}"
+        return f"{number}. {snapshot.outline.entries[number - 1].title}"
+
+    with st.form(f"slide-repair-{snapshot.id}-{snapshot.revision}"):
+        slide = st.selectbox("Flagged slide to repair", flagged_slides, format_func=slide_label)
+        feedback = st.text_area(
+            "Correction feedback (optional)",
+            placeholder="Describe what should change or what evidence to check",
+        )
+        page_numbers = ()
+        if selected_pdf and snapshot.source_pages:
+            page_numbers = tuple(st.multiselect(
+                "Additional CPG PDF pages (optional)",
+                range(1, snapshot.source_pages + 1),
+                max_selections=3,
+                help="Select up to three original PDF pages to include in the repair.",
+            ))
+        reference_url = ""
+        if selected_pdf and provider == "anthropic":
+            reference_url = st.text_input(
+                "Public reference URL (optional)",
+                max_chars=500,
+                help="Anthropic can look up supplemental evidence from this URL. The CPG remains primary.",
+            )
+        requested = st.form_submit_button("Fix and re-review", type="primary")
+    if requested:
+        try:
+            manager.repair_slide(
+                snapshot.id, snapshot.revision, slide, feedback.strip(),
+                page_numbers=page_numbers, reference_url=reference_url,
+            )
+        except (RunConflict, KeyError, ValueError, OSError) as error:
+            show_error(error)
+            return
+        st.rerun()
+
+
 def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
     try:
         snapshot = manager.snapshot(run_id)
@@ -243,6 +301,7 @@ def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
     if snapshot.status == "awaiting_approval":
         show_review(manager, snapshot)
     show_flags(snapshot.flags)
+    show_slide_repair(manager, snapshot, provider)
     if snapshot.artifacts is not None:
         show_artifacts(snapshot.artifacts, key_prefix=snapshot.id)
     if snapshot.status in {"failed", "discarded"}:

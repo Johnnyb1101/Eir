@@ -277,9 +277,11 @@ class RunManager:
             kind = type(error).__name__
             _LOGGER.error("Visual review failed for Eir run %s page %s (%s)", run.snapshot.id, page_number, kind)
             run.log.append(_event("eir", "visual_review_failed", page_number=page_number, error_type=kind))
+            message = f"Visual check for PDF page {page_number} failed ({kind})."
+            if kind == "OpenAIProviderError":
+                message += f" {error}"
             with self._lock:
-                run.snapshot = replace(run.snapshot, reviewing_page=None,
-                                       visual_message=f"Visual check for PDF page {page_number} failed ({kind}).")
+                run.snapshot = replace(run.snapshot, reviewing_page=None, visual_message=message)
             return
 
         run.log.append(_event("eir", "visual_review", **asdict(review)))
@@ -408,7 +410,8 @@ class RunManager:
             kind = type(error).__name__
             _LOGGER.error("Slide repair failed for Eir run %s slide %s while %s (%s)",
                           run.snapshot.id, slide_number, stage, kind)
-            self._repair_rejected(run, slide_number, (f"Eir stopped while {stage} ({kind}).",))
+            problem = str(error) if kind == "OpenAIProviderError" else f"Eir stopped while {stage} ({kind})."
+            self._repair_rejected(run, slide_number, (problem,))
             return
 
         with self._lock:
@@ -440,7 +443,7 @@ class RunManager:
         run.log.append(_event("eir", "run_failed", stage=stage, error_type=error_type))
         self._save_partial_log(run)
         message = f"Eir stopped while {stage} ({error_type})."
-        if isinstance(error, SourcePdfError):
+        if isinstance(error, SourcePdfError) or error_type == "OpenAIProviderError":
             message = str(error)
         elif error_type == "AuthenticationError":
             message = "Anthropic rejected the configured key. Check the Windows user environment and restart Eir."

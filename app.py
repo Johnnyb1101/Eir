@@ -197,6 +197,8 @@ def show_visual_review(manager: RunManager, snapshot, visual_config) -> None:
         st.caption(f"Page check provider: {visual_config['provider']} / {visual_config['model']} · Separate from outline and slide generation.")
         if visual_config["provider"] == "anthropic":
             st.caption("Anthropic receives the rendered page image and extracted page text.")
+        elif visual_config["provider"] == "openai":
+            st.caption("OpenAI receives the rendered page image and extracted page text.")
         elif visual_config["provider"] == "ollama":
             st.caption("Ollama processes the page image and extracted page text locally.")
     disabled = visual_config is None or review_in_progress(snapshot)

@@ -35,6 +35,17 @@ def test_personal_override_and_independent_visual_choice(base):
     assert base.read_bytes() == original
 
 
+def test_local_openai_provider_and_visual_model(base):
+    base.with_name("config.local.yaml").write_text(
+        "provider: openai\nmodel: gpt-6.2-sol\nvisual:\n"
+        "  provider: openai\n  model: gpt-6.2-sol\n", encoding="utf-8",
+    )
+
+    settings = load_config(base)
+    assert (settings.provider, settings.model) == ("openai", "gpt-6.2-sol")
+    assert (settings.visual.provider, settings.visual.model) == ("openai", "gpt-6.2-sol")
+
+
 @pytest.mark.parametrize("local", [
     "provider: other\nmodel: example\n",
     "provider: ollama\n",

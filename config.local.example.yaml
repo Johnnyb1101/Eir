@@ -7,6 +7,11 @@ model: "YOUR_INSTALLED_OLLAMA_MODEL"
 # model: "YOUR_ANTHROPIC_MODEL"
 # Set ANTHROPIC_API_KEY in your environment, never in this file.
 
+# To use OpenAI instead, replace both values above:
+# provider: openai
+# model: gpt-6.2-sol
+# Set OPENAI_API_KEY in your environment, never in this file.
+
 # Visual extraction uses an independent provider/model choice.
 # null keeps visual processing disabled.
 visual: null
@@ -17,3 +22,5 @@ visual: null
 # visual:
 #   provider: ollama
 #   model: "YOUR_INSTALLED_VISION_MODEL"
+# GPT-6.2 Sol can also check a selected page. For an OpenAI page check,
+# set visual.provider to openai and visual.model to gpt-6.2-sol.

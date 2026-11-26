@@ -1,6 +1,6 @@
 # Personal AI configuration
 
-Eir supports Anthropic and a local Ollama server. Shared defaults live in
+Eir supports Anthropic, OpenAI, and a local Ollama server. Shared defaults live in
 `config.yaml`. To make a personal choice, copy `config.local.example.yaml` to
 `config.local.yaml` in the project root and replace its placeholder model name.
 Git ignores the local file. Do not put API keys in either configuration file.
@@ -16,6 +16,14 @@ Set `provider: anthropic` and `model` to a model available to your account.
 Set `ANTHROPIC_API_KEY` in your environment. Eir does not load `.env` files itself.
 Requests send prompts and retrieved source text to Anthropic and incur API usage.
 An Anthropic client is created only when an Anthropic request is made.
+
+## OpenAI
+
+Set `provider: openai` and `model: gpt-6.2-sol` in `config.local.yaml`. Set
+`OPENAI_API_KEY` in the environment before starting Eir. Eir sends prompts and
+retrieved source text to the OpenAI Responses API. Requests use your project’s
+API usage and credits. To use the same model for an optional page check, set
+`visual.provider: openai` and `visual.model: gpt-6.2-sol` in the visual mapping.
 
 ## Ollama
 

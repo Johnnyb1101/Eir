@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 import json
 import logging
@@ -13,6 +13,8 @@ from src.pipeline import (
     OutlineEvidence, PreparedOutline, RunArtifacts, build_deck, export_draft,
     prepare_outline, write_run_log,
 )
+from src.source_pdf import SelectedPdf, SourcePdfError, read_selected_pdf
+from src.visual_extract import PageReview, review_extracted_page
 
 
 class RunConflict(RuntimeError):
@@ -32,6 +34,13 @@ class RunSnapshot:
     total_slides: int = 0
     flags: tuple[SlideNote, ...] = ()
     artifacts: RunArtifacts | None = None
+    source_name: str | None = None
+    source_warnings: tuple[str, ...] = ()
+    source_extractor: str | None = None
+    source_pages: int = 0
+    reviewing_page: int | None = None
+    visual_message: str | None = None
+    visual_reviews: tuple[PageReview, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -41,6 +50,7 @@ class SavedRun:
     created_at: str
     artifacts: RunArtifacts
     flags: tuple[SlideNote, ...] = ()
+    source_mode: str | None = None
 
 
 @dataclass
@@ -49,6 +59,8 @@ class _Run:
     directory: Path
     log: list[dict] = field(default_factory=list)
     prepared: PreparedOutline | None = None
+    source_path: Path | None = None
+    selected_source: SelectedPdf | None = None
 
 
 _ACTIVE = {"outlining", "awaiting_approval", "generating"}
@@ -82,14 +94,20 @@ class RunManager:
         with self._lock:
             return self._get(run_id).snapshot
 
-    def start(self, spec):
+    def start(self, spec, *, source_path=None, source_extractor="pypdf"):
         with self._lock:
             if self._current and self._current.snapshot.status in _ACTIVE:
                 raise RunConflict("Finish or discard the current run before starting another.")
+            if source_path is None and source_extractor != "pypdf":
+                raise RunConflict("Choose an original PDF to use a PDF text extractor.")
             run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:12]}"
             directory = self._output / "runs" / run_id
             directory.mkdir(parents=True)
-            run = _Run(RunSnapshot(run_id, spec.model_copy(deep=True)), directory)
+            source_path = Path(source_path) if source_path is not None else None
+            source_name = source_path.name if source_path is not None else None
+            run = _Run(RunSnapshot(run_id, spec.model_copy(deep=True), source_name=source_name,
+                                   source_extractor=source_extractor if source_path is not None else None),
+                       directory, source_path=source_path)
             run.log.append(_event("human", "run_requested", request=spec.model_dump(mode="json")))
             self._current = run
             self._executor.submit(self._outline, run, None)
@@ -122,7 +140,23 @@ class RunManager:
             run.log.append(_event("human", "outline_discarded", revision=revision))
             self._save_partial_log(run)
             run.prepared = None
+            run.selected_source = None
             run.snapshot = replace(run.snapshot, status="discarded", message="Outline discarded.")
+
+    def review_page(self, run_id, revision, page_number):
+        from src.llm import config
+
+        with self._lock:
+            run = self._awaiting(run_id, revision)
+            if run.selected_source is None:
+                raise RunConflict("Select an original PDF to review a page visually.")
+            if not config.get("visual"):
+                raise RunConflict("Configure a visual model before requesting a page review.")
+            if type(page_number) is not int or not 1 <= page_number <= run.selected_source.page_count:
+                raise RunConflict(f"Choose a PDF page from 1 to {run.selected_source.page_count}.")
+            run.snapshot = replace(run.snapshot, reviewing_page=page_number,
+                                   visual_message=f"Checking PDF page {page_number} against extracted text.")
+            self._executor.submit(self._review, run, page_number)
 
     def _get(self, run_id):
         if self._current is None or self._current.snapshot.id != run_id:
@@ -136,6 +170,8 @@ class RunManager:
             raise RunConflict("This run is no longer active.") from None
         if run.snapshot.status != "awaiting_approval" or run.snapshot.revision != revision:
             raise RunConflict("The outline has changed or was already acted on. Refresh and review it again.")
+        if run.snapshot.reviewing_page is not None:
+            raise RunConflict("Wait for the active visual check to finish.")
         return run
 
     def _outline(self, run, feedback):
@@ -145,8 +181,19 @@ class RunManager:
             if feedback is None:
                 run.log.append(_event("eir", "provider_selected", provider=config["provider"],
                                       model=config["model"]))
+                if run.source_path is not None:
+                    run.selected_source = read_selected_pdf(run.source_path, extractor=run.snapshot.source_extractor)
+                    run.log.append(_event("eir", "source_selected", source_mode="selected_pdf",
+                                          filename=run.selected_source.filename, sha256=run.selected_source.sha256,
+                                          extractor=run.selected_source.extractor,
+                                          warnings=run.selected_source.warnings))
+                    with self._lock:
+                        run.snapshot = replace(run.snapshot, source_warnings=run.selected_source.warnings,
+                                               source_pages=run.selected_source.page_count)
+                else:
+                    run.log.append(_event("eir", "source_selected", source_mode="indexed"))
             with capture_usage_log(run.log):
-                prepared = prepare_outline(run.snapshot.spec, feedback)
+                prepared = prepare_outline(run.snapshot.spec, feedback, selected_source=run.selected_source)
         except Exception as error:
             self._fail(run, "preparing the outline", error)
             return
@@ -155,6 +202,29 @@ class RunManager:
             run.snapshot = replace(run.snapshot, status="awaiting_approval", outline=prepared.outline,
                                    sources=prepared.evidence, total_slides=len(prepared.outline.entries),
                                    message="Review and approve the outline to continue.")
+
+    def _review(self, run, page_number):
+        from src.llm import capture_usage_log
+
+        try:
+            with capture_usage_log(run.log):
+                review = review_extracted_page(run.selected_source, page_number)
+        except Exception as error:
+            kind = type(error).__name__
+            _LOGGER.error("Visual review failed for Eir run %s page %s (%s)", run.snapshot.id, page_number, kind)
+            run.log.append(_event("eir", "visual_review_failed", page_number=page_number, error_type=kind))
+            with self._lock:
+                run.snapshot = replace(run.snapshot, reviewing_page=None,
+                                       visual_message=f"Visual check for PDF page {page_number} failed ({kind}).")
+            return
+
+        run.log.append(_event("eir", "visual_review", **asdict(review)))
+        with self._lock:
+            reviews = {item.page_number: item for item in run.snapshot.visual_reviews}
+            reviews[page_number] = review
+            run.snapshot = replace(run.snapshot, reviewing_page=None,
+                                   visual_reviews=tuple(reviews[number] for number in sorted(reviews)),
+                                   visual_message=f"Unreviewed findings are ready for PDF page {page_number}.")
 
     def _generate(self, run):
         def update_progress(completed, flag):
@@ -177,7 +247,8 @@ class RunManager:
             artifacts = _paths(run.directory)
             with TemporaryDirectory(dir=run.directory) as staging:
                 staged = _paths(Path(staging))
-                export_draft(draft, staged, run.log)
+                export_draft(draft, staged, run.log, selected_source=run.selected_source,
+                             visual_reviews=run.snapshot.visual_reviews)
                 staged.deck.replace(artifacts.deck)
                 staged.packet.replace(artifacts.packet)
                 staged.log.replace(artifacts.log)
@@ -186,6 +257,7 @@ class RunManager:
             return
         with self._lock:
             run.prepared = None
+            run.selected_source = None
             run.snapshot = replace(run.snapshot, status="completed", message="Draft files are ready.",
                                    artifacts=artifacts, flags=draft.flags)
 
@@ -201,12 +273,15 @@ class RunManager:
         run.log.append(_event("eir", "run_failed", stage=stage, error_type=error_type))
         self._save_partial_log(run)
         message = f"Eir stopped while {stage} ({error_type})."
-        if error_type == "AuthenticationError":
+        if isinstance(error, SourcePdfError):
+            message = str(error)
+        elif error_type == "AuthenticationError":
             message = "Anthropic rejected the configured key. Check the Windows user environment and restart Eir."
         elif error_type in {"APIConnectionError", "APITimeoutError", "ConnectionError", "ReadTimeout"}:
             message = "Eir lost its connection to the configured provider. Check that the provider is reachable."
         with self._lock:
             run.prepared = None
+            run.selected_source = None
             run.snapshot = replace(run.snapshot, status="failed", message=message)
 
     def history(self):
@@ -241,18 +316,25 @@ class RunManager:
         except (OSError, UnicodeError):
             return
         date = datetime.fromtimestamp(modified).astimezone().strftime("%Y-%m-%d %H:%M")
-        flags = self._read_flags(artifacts.log)
-        saved.append((modified, SavedRun(run_id or directory.name, title, date, artifacts, flags)))
+        events = self._read_events(artifacts.log)
+        flags = self._flags(events)
+        mode = next((event["source_mode"].replace("-", "_") for event in events
+                     if isinstance(event.get("source_mode"), str)), None)
+        saved.append((modified, SavedRun(run_id or directory.name, title, date, artifacts, flags, mode)))
 
     @staticmethod
-    def _read_flags(log_path):
+    def _read_events(log_path):
         try:
             events = json.loads(log_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return ()
+        return tuple(event for event in events if isinstance(event, dict)) if isinstance(events, list) else ()
+
+    @staticmethod
+    def _flags(events):
         last_verdicts = {}
-        for event in events if isinstance(events, list) else ():
-            if isinstance(event, dict) and event.get("agent") == "verdict":
+        for event in events:
+            if event.get("agent") == "verdict":
                 index = event.get("slide_index")
                 if isinstance(index, int) and index >= 0:
                     last_verdicts[index] = event

@@ -20,6 +20,14 @@ class ModelSettings(BaseModel):
 
 class Settings(ModelSettings):
     visual: ModelSettings | None = None
+    source_folder: str = "corpus/"
+
+    @field_validator("source_folder")
+    @classmethod
+    def nonblank_source_folder(cls, value):
+        if not value.strip():
+            raise ValueError("Source folder must not be blank")
+        return value
 
 
 def read_config(path):

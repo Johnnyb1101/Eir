@@ -14,6 +14,14 @@ def test_shared_defaults_disable_visual_processing(base):
     assert settings.provider == "anthropic"
     assert settings.model == "shared-model"
     assert settings.visual is None
+    assert settings.source_folder == "corpus/"
+
+
+def test_local_source_folder_override(base):
+    base.with_name("config.local.yaml").write_text(
+        'source_folder: "D:/Synced/Clinical Guidelines"\n', encoding="utf-8"
+    )
+    assert load_config(base).source_folder == "D:/Synced/Clinical Guidelines"
 
 
 def test_personal_override_and_independent_visual_choice(base):
@@ -32,6 +40,8 @@ def test_personal_override_and_independent_visual_choice(base):
     "provider: ollama\n",
     "model: '   '\n",
     "model: 123\n",
+    "source_folder: '   '\n",
+    "source_folder: 123\n",
     "visual:\n  provider: ollama\n",
     "visual: true\n",
     "api_key: do-not-store-keys-here\n",

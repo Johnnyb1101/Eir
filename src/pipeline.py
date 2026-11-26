@@ -29,6 +29,7 @@ class PreparedOutline:
     outline: Outline
     evidence: tuple[OutlineEvidence, ...]
     chunks: tuple[list[dict], ...]
+    pinned_source: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,13 +47,41 @@ class RunArtifacts:
     log: Path
 
 
-def prepare_outline(spec, feedback=None):
-    from src.agents.outliner import classify_entry, outline_deck
+def prepare_outline(spec, feedback=None, *, selected_source=None):
+    from src.agents.outliner import outline_deck
+
+    if selected_source is not None:
+        shown = selected_source.outline_evidence()
+        outline = outline_deck(spec, shown, feedback)
+        return _prepare_evidence(outline, shown, selected_source.evidence_for, pinned_source=True)
+
     from src.retrieve import document_sections, entry_query, retrieve
 
     shown = document_sections(retrieve(spec.topic))
     outline = outline_deck(spec, shown, feedback)
-    entry_chunks = tuple(retrieve(entry_query(entry)) for entry in outline.entries)
+    return _prepare_evidence(outline, shown, lambda entry: retrieve(entry_query(entry)))
+
+
+def prepare_approved_outline(outline, *, selected_source=None, indexed_source=None):
+    if (selected_source is None) == (indexed_source is None):
+        raise ValueError("Provide exactly one source for the approved outline")
+    if selected_source is not None:
+        return _prepare_evidence(outline, selected_source.outline_evidence(),
+                                 selected_source.evidence_for, pinned_source=True)
+
+    from src.retrieve import document_sections, entry_query, retrieve
+
+    hits = retrieve(outline.topic, source=indexed_source)
+    shown = document_sections(hits)
+    return _prepare_evidence(outline, shown,
+                             lambda entry: retrieve(entry_query(entry), source=indexed_source),
+                             pinned_source=True)
+
+
+def _prepare_evidence(outline, shown, evidence_for, *, pinned_source=False):
+    from src.agents.outliner import classify_entry
+
+    entry_chunks = tuple(evidence_for(entry) for entry in outline.entries)
     evidence = []
     for entry, chunks in zip(outline.entries, entry_chunks, strict=True):
         classification = classify_entry(entry, shown, chunks)
@@ -62,7 +91,7 @@ def prepare_outline(spec, feedback=None):
             classification["state"], sources, tuple(classification["fabricated"]),
             tuple(classification["unmatched"]),
         ))
-    return PreparedOutline(outline, tuple(evidence), entry_chunks)
+    return PreparedOutline(outline, tuple(evidence), entry_chunks, pinned_source)
 
 
 def build_deck(prepared, *, on_retry=None, on_slide=None, refresh_sources=False):
@@ -71,6 +100,8 @@ def build_deck(prepared, *, on_retry=None, on_slide=None, refresh_sources=False)
     from src.llm import record_usage
 
     if refresh_sources:
+        if prepared.pinned_source:
+            raise ValueError("Cannot refresh evidence for a pinned source")
         from src.retrieve import entry_query, retrieve
 
     slides = []
@@ -120,7 +151,7 @@ def write_run_log(path, log):
     path.write_text(json.dumps(log, indent=2), encoding="utf-8")
 
 
-def export_draft(draft, artifacts, log, *, on_rendered=None):
+def export_draft(draft, artifacts, log, *, on_rendered=None, selected_source=None, visual_reviews=()):
     from src.packet import write_packet
     from src.render import render_deck
 
@@ -128,4 +159,5 @@ def export_draft(draft, artifacts, log, *, on_rendered=None):
     if on_rendered:
         on_rendered()
     write_run_log(artifacts.log, log)
-    write_packet(draft.deck, draft.grades, draft.attempts, artifacts.packet)
+    write_packet(draft.deck, draft.grades, draft.attempts, artifacts.packet,
+                 selected_source=selected_source, visual_reviews=visual_reviews)

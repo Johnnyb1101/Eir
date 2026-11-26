@@ -1,6 +1,8 @@
 import hashlib
 import io
 import json
+from threading import Event
+from time import monotonic, sleep
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -10,7 +12,10 @@ from pydantic import ValidationError
 from pypdf import PdfWriter
 
 from src import llm, visual_extract
-from src.contracts import VisualInterpretation
+from src.agents import critic, outliner, writer
+from src.contracts import Outline, OutlineEntry, RequestSpec, Slide, SlideGrade, VisualInterpretation
+from src.source_pdf import SelectedPdf, SourcePage
+from src.ui_jobs import RunConflict, RunManager
 
 
 def content(**overrides):
@@ -42,6 +47,103 @@ def test_render_selects_requested_page_and_caps_dimensions(pdf):
             assert image.format == "PNG"
             assert image.size == dimensions
     assert pdf.read_bytes() == original
+
+
+def test_selected_pdf_visual_check_uses_pinned_bytes_and_keeps_notes_separate(pdf, tmp_path, monkeypatch):
+    data = pdf.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    page = SourcePage("test-pdf-s1", 1, "PDF page", "Assessment source only", "Assessment source only")
+    selected = SelectedPdf(filename=pdf.name, title="Test guide", sha256=digest, pages=(page,),
+                           warnings=(), extractor="pdfium", page_count=2, pdf_bytes=data)
+    checking = Event()
+    release = Event()
+    requests = 0
+
+    def read_source(path, *, extractor):
+        assert path == pdf and extractor == "pdfium"
+        return selected
+
+    def review(image, prompt, schema, *, system):
+        # Page 2 has no text but can still be checked from the pinned render.
+        assert system == visual_extract.REVIEW_SYSTEM
+        assert 'Extracted page text as JSON:\n""' in prompt
+        with Image.open(io.BytesIO(image)) as screen:
+            assert screen.width > screen.height
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            raise ValueError("Test rejected visual response")
+        checking.set()
+        assert release.wait(5)
+        return schema(missing=["Test infographic labels"], uncertainties=["Test branch uncertain"]), {
+            "provider": "anthropic", "model": "test-vision",
+        }
+
+    def write_slide(entry, chunks, *_rest, **_options):
+        assert [chunk["text"] for chunk in chunks] == [page.text]
+        return Slide(title=entry.title, bullets=["Source-backed content"], speaker_notes="Draft notes",
+                     time_minutes=2, citations=[page.id])
+
+    monkeypatch.setitem(llm.config, "visual", {"provider": "anthropic", "model": "test-vision"})
+    monkeypatch.setattr(llm, "generate_visual", review)
+    monkeypatch.setattr("src.ui_jobs.read_selected_pdf", read_source)
+    monkeypatch.setattr(outliner, "outline_deck", lambda spec, evidence, feedback: Outline(
+        topic=spec.topic, entries=[OutlineEntry(title="Assessment", objective="Describe the source",
+                                              time_minutes=2, chunk_ids=[page.id])],
+    ))
+    monkeypatch.setattr(writer, "write_slide", write_slide)
+    monkeypatch.setattr(critic, "critique_slide", lambda *_, **__: SlideGrade(passed=True))
+
+    runs = RunManager(tmp_path / "output")
+
+    def wait_for(check):
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            state = runs.snapshot(run_id)
+            if check(state) or state.status == "failed":
+                assert state.status != "failed", state.message
+                return state
+            sleep(0.01)
+        pytest.fail("Run did not reach its expected state")
+
+    try:
+        run_id = runs.start(RequestSpec(topic="Assessment", audience="Reviewers", duration_minutes=2),
+                            source_path=pdf, source_extractor="pdfium")
+        outline = wait_for(lambda state: state.status == "awaiting_approval")
+        assert outline.source_pages == 2
+        with pytest.raises(RunConflict, match="from 1 to 2"):
+            runs.review_page(run_id, outline.revision, 3)
+        pdf.write_bytes(b"replaced file after outline")
+        runs.review_page(run_id, outline.revision, 2)
+        rejected = wait_for(lambda state: "failed" in (state.visual_message or ""))
+        assert rejected.status == "awaiting_approval"
+        assert rejected.reviewing_page is None
+        assert not rejected.visual_reviews
+        runs.review_page(run_id, rejected.revision, 2)
+        assert checking.wait(5)
+        with pytest.raises(RunConflict, match="active visual check"):
+            runs.review_page(run_id, outline.revision, 1)
+        with pytest.raises(RunConflict, match="active visual check"):
+            runs.approve(run_id, outline.revision)
+        release.set()
+
+        checked = wait_for(lambda state: bool(state.visual_reviews))
+        assert checked.visual_reviews[0].source_sha256 == digest
+        assert checked.visual_reviews[0].page_number == 2
+        runs.approve(run_id, checked.revision)
+        complete = wait_for(lambda state: state.status == "completed")
+        packet = complete.artifacts.packet.read_text(encoding="utf-8")
+        assert "Text extractor `pdfium`" in packet
+        assert "## Unreviewed visual checks" in packet
+        assert "### PDF page 2" in packet
+        assert "Test infographic labels" in packet
+        assert "Test guide, PDF page, 1" in packet
+        events = json.loads(complete.artifacts.log.read_text(encoding="utf-8"))
+        report, = [event for event in events if event.get("action") == "visual_review"]
+        assert (report["status"], report["page_number"], report["source_sha256"]) == ("unreviewed", 2, digest)
+    finally:
+        release.set()
+        runs._executor.shutdown(wait=True)
 
 
 @pytest.mark.parametrize("page", [0, -1, 3, True, 1.5])

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 import json
@@ -57,35 +58,42 @@ def test_selected_pdf_visual_check_uses_pinned_bytes_and_keeps_notes_separate(pd
                            warnings=(), extractor="pdfium", page_count=2, pdf_bytes=data)
     checking = Event()
     release = Event()
-    requests = 0
 
     def read_source(path, *, extractor):
         assert path == pdf and extractor == "pdfium"
         return selected
 
-    def review(image, prompt, schema, *, system):
+    def review(*, model, system, messages, output_config, max_tokens):
+        assert model == "test-vision"
         # Page 2 has no text but can still be checked from the pinned render.
         assert system == visual_extract.REVIEW_SYSTEM
+        image_content, text_content = messages[0]["content"]
+        prompt = text_content["text"]
         assert 'Extracted page text as JSON:\n""' in prompt
+        image = base64.b64decode(image_content["source"]["data"])
         with Image.open(io.BytesIO(image)) as screen:
             assert screen.width > screen.height
-        nonlocal requests
-        requests += 1
-        if requests == 1:
-            raise ValueError("Test rejected visual response")
-        checking.set()
-        assert release.wait(5)
-        return schema(missing=["Test infographic labels"], uncertainties=["Test branch uncertain"]), {
-            "provider": "anthropic", "model": "test-vision",
-        }
+        response_format = output_config["format"]
+        assert response_format["type"] == "json_schema"
+        assert response_format["schema"]["required"] == ["missing", "uncertainties"]
+        if client.messages.create.call_count == 1:
+            text = "Invalid JSON"
+        else:
+            checking.set()
+            assert release.wait(5)
+            text = json.dumps({"missing": ["Test infographic labels"],
+                               "uncertainties": ["Test branch uncertain"]})
+        return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=text)])
 
     def write_slide(entry, chunks, *_rest, **_options):
         assert [chunk["text"] for chunk in chunks] == [page.text]
         return Slide(title=entry.title, bullets=["Source-backed content"], speaker_notes="Draft notes",
                      time_minutes=2, citations=[page.id])
 
-    monkeypatch.setitem(llm.config, "visual", {"provider": "anthropic", "model": "test-vision"})
-    monkeypatch.setattr(llm, "generate_visual", review)
+    client = Mock()
+    client.messages.create.side_effect = review
+    monkeypatch.setattr(llm, "client", client)
+    monkeypatch.setitem(llm.config, "visual", None)
     monkeypatch.setattr("src.ui_jobs.read_selected_pdf", read_source)
     monkeypatch.setattr(outliner, "outline_deck", lambda spec, evidence, feedback: Outline(
         topic=spec.topic, entries=[OutlineEntry(title="Assessment", objective="Describe the source",
@@ -111,11 +119,16 @@ def test_selected_pdf_visual_check_uses_pinned_bytes_and_keeps_notes_separate(pd
                             source_path=pdf, source_extractor="pdfium")
         outline = wait_for(lambda state: state.status == "awaiting_approval")
         assert outline.source_pages == 2
+        with pytest.raises(RunConflict, match="Configure a visual model"):
+            runs.review_page(run_id, outline.revision, 2)
+        monkeypatch.setitem(llm.config, "visual", {"provider": "anthropic", "model": "test-vision"})
         with pytest.raises(RunConflict, match="from 1 to 2"):
             runs.review_page(run_id, outline.revision, 3)
+        client.messages.create.assert_not_called()
         pdf.write_bytes(b"replaced file after outline")
         runs.review_page(run_id, outline.revision, 2)
         rejected = wait_for(lambda state: "failed" in (state.visual_message or ""))
+        assert "JSONDecodeError" in rejected.visual_message
         assert rejected.status == "awaiting_approval"
         assert rejected.reviewing_page is None
         assert not rejected.visual_reviews
@@ -128,6 +141,7 @@ def test_selected_pdf_visual_check_uses_pinned_bytes_and_keeps_notes_separate(pd
         release.set()
 
         checked = wait_for(lambda state: bool(state.visual_reviews))
+        assert client.messages.create.call_count == 2
         assert checked.visual_reviews[0].source_sha256 == digest
         assert checked.visual_reviews[0].page_number == 2
         runs.approve(run_id, checked.revision)

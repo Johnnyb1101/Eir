@@ -3,7 +3,7 @@ pytest==9.1.1
 anthropic==0.116.0
 pyyaml==6.0.3
 python-pptx==1.0.2
-pypdf==6.14.2
+pypdf==7.1.1
 chromadb==1.5.9
 pypdfium2==5.13.0
 Pillow==12.3.0

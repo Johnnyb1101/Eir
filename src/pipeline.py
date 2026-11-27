@@ -199,6 +199,28 @@ def repair_draft_slide(draft, entry, slide_index, chunks, *, correction, attempt
     return DeckDraft(draft.deck.model_copy(update={"slides": slides}), grades, attempts, flags), grade
 
 
+def rereview_deck(deck, prepared, *, on_slide=None):
+    from src.agents.critic import critique_slide
+    from src.llm import record_usage
+
+    grades = []
+    flags = []
+    slides = zip(deck.slides, prepared.outline.entries, prepared.chunks, strict=True)
+    for index, (slide, entry, chunks) in enumerate(slides):
+        grade = critique_slide(slide, entry, chunks, slide_index=index, attempt=1)
+        grades.append(grade)
+        record_usage({
+            "agent": "verdict", "action": "full_deck_slide_verdict", "slide_index": index,
+            "attempt": 1, "passed": grade.passed, "problems": grade.problems,
+            "time": datetime.now().isoformat(timespec="seconds"),
+        })
+        if not grade.passed:
+            flags.append(SlideNote(slide_index=index, note="; ".join(grade.problems)))
+        if on_slide:
+            on_slide(index + 1)
+    return DeckDraft(deck, grades, [1] * len(grades), tuple(flags))
+
+
 def write_run_log(path, log):
     path.write_text(json.dumps(log, indent=2), encoding="utf-8")
 

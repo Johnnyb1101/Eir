@@ -228,7 +228,7 @@ def show_slide_repair(manager: RunManager, snapshot, provider) -> None:
         st.markdown("**Repair review findings**")
         for finding in snapshot.repair_findings:
             st.text(finding)
-    if snapshot.status == "repairing" or not snapshot.flags:
+    if snapshot.status == "repairing" or not snapshot.flags or not snapshot.repair_available:
         return
 
     flagged_slides = sorted({flag.slide_index + 1 for flag in snapshot.flags})
@@ -246,7 +246,7 @@ def show_slide_repair(manager: RunManager, snapshot, provider) -> None:
             placeholder="Describe what should change or what evidence to check",
         )
         page_numbers = ()
-        if selected_pdf and snapshot.source_pages:
+        if selected_pdf and snapshot.source_pages and snapshot.repair_pages_available:
             page_numbers = tuple(st.multiselect(
                 "Additional CPG PDF pages (optional)",
                 range(1, snapshot.source_pages + 1),
@@ -273,17 +273,41 @@ def show_slide_repair(manager: RunManager, snapshot, provider) -> None:
         st.rerun()
 
 
-def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
+def show_deck_rereview_action(manager: RunManager, bundle_id: str, *, key: str, disabled: bool) -> None:
+    if st.button("Full-deck re-review", key=key, disabled=disabled):
+        try:
+            st.session_state.selected_run_id = manager.review_deck(bundle_id)
+        except (RunConflict, KeyError, ValueError, OSError) as error:
+            show_error(error)
+            return
+        st.rerun()
+
+
+def show_deck_rereview_findings(verdicts) -> None:
+    if not verdicts:
+        return
+    passed = sum(verdict.passed for verdict in verdicts)
+    st.subheader("Full-deck re-review findings")
+    st.text(f"{passed} of {len(verdicts)} slides passed · {len(verdicts) - passed} flagged")
+    for number, verdict in enumerate(verdicts, 1):
+        if not verdict.passed:
+            st.text(f"Slide {number} · Flagged")
+            for problem in verdict.problems:
+                st.text(problem)
+
+
+def show_run(manager: RunManager, run_id: str, visual_config, provider) -> str | None:
     try:
         snapshot = manager.snapshot(run_id)
     except KeyError:
         st.session_state.pop("selected_run_id", None)
         st.warning("This run is no longer available.")
-        return
+        return None
 
     st.subheader("Current run")
     st.text(f"{snapshot.spec.topic} · {snapshot.spec.duration_minutes} min · {snapshot.spec.audience}")
-    st.text(f"Status: {snapshot.status.replace('_', ' ').title()}")
+    status_label = "Re-reviewing" if snapshot.status == "rereviewing" else snapshot.status.replace("_", " ").title()
+    st.text(f"Status: {status_label}")
     st.text(f"Source: {snapshot.source_name or 'Indexed documents'}")
     if snapshot.source_extractor is not None:
         st.text(f"Text extractor: {snapshot.source_extractor}")
@@ -291,10 +315,11 @@ def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
         st.warning(warning)
     if snapshot.message:
         st.text(snapshot.message)
-    if snapshot.status == "generating" and snapshot.total_slides:
+    if snapshot.status in {"generating", "rereviewing"} and snapshot.total_slides:
+        progress_label = "Slides re-reviewed" if snapshot.status == "rereviewing" else "Slides completed"
         st.progress(
             min(snapshot.completed_slides / snapshot.total_slides, 1.0),
-            text=f"Slides completed: {snapshot.completed_slides} of {snapshot.total_slides}",
+            text=f"{progress_label}: {snapshot.completed_slides} of {snapshot.total_slides}",
         )
     if snapshot.status == "awaiting_approval":
         show_outline(snapshot)
@@ -302,12 +327,23 @@ def show_run(manager: RunManager, run_id: str, visual_config, provider) -> None:
     show_visual_review(manager, snapshot, visual_config)
     if snapshot.status == "awaiting_approval":
         show_review(manager, snapshot)
-    show_flags(snapshot.flags)
+    if snapshot.review_verdicts:
+        show_deck_rereview_findings(snapshot.review_verdicts)
+    else:
+        show_flags(snapshot.flags)
     show_slide_repair(manager, snapshot, provider)
+    bundle_id = None
     if snapshot.artifacts is not None:
         show_artifacts(snapshot.artifacts, key_prefix=snapshot.id)
+        if snapshot.status == "completed" and snapshot.rereview_available:
+            bundle_id = snapshot.artifacts.deck.parent.name
+            show_deck_rereview_action(
+                manager, bundle_id, key=f"rereview-current-{snapshot.id}",
+                disabled=manager.active_id() is not None,
+            )
     if snapshot.status in {"failed", "discarded"}:
         st.info("This run is closed. You can start another request.")
+    return bundle_id
 
 
 def request_form(manager: RunManager, *, disabled: bool, source_folder: str) -> None:
@@ -370,7 +406,7 @@ def request_form(manager: RunManager, *, disabled: bool, source_folder: str) -> 
     st.rerun()
 
 
-def history_panel(manager: RunManager) -> None:
+def history_panel(manager: RunManager, current_rereview_bundle: str | None, *, disabled: bool) -> None:
     with st.expander("Completed run history", expanded=False):
         try:
             history = manager.history()
@@ -394,6 +430,10 @@ def history_panel(manager: RunManager) -> None:
         run = options[chosen]
         show_flags(run.flags)
         show_artifacts(run.artifacts, key_prefix=f"history-{chosen}")
+        if run.rereview_available and chosen != current_rereview_bundle:
+            show_deck_rereview_action(manager, chosen, key=f"rereview-history-{chosen}", disabled=disabled)
+        elif not run.rereview_available and run.source_mode == "selected_pdf":
+            st.caption("Full-deck re-review requires the saved slide and evidence snapshots for this run.")
 
 
 st.title("Eir training review")
@@ -414,6 +454,7 @@ if active_id is not None:
     st.session_state.selected_run_id = active_id
 
 selected_id = st.session_state.get("selected_run_id")
+current_rereview_bundle = None
 if selected_id:
     # Only the run panel refreshes while a worker is active.
     if active_id == selected_id:
@@ -425,6 +466,6 @@ if selected_id:
 
         live_run_panel()
     else:
-        show_run(manager, selected_id, config.get("visual"), config["provider"])
+        current_rereview_bundle = show_run(manager, selected_id, config.get("visual"), config["provider"])
 
-history_panel(manager)
+history_panel(manager, current_rereview_bundle, disabled=active_id is not None)

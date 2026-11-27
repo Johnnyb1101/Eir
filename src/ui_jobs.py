@@ -1,18 +1,23 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
+from hashlib import sha256
 import json
 import logging
 from pathlib import Path
+import re
+from shutil import copyfile
 from tempfile import TemporaryDirectory
 from threading import Lock
 from uuid import uuid4
 
-from src.contracts import Outline, RequestSpec, SlideNote
+from src.contracts import Outline, RequestSpec, SlideGrade, SlideNote
+from src.packet import write_packet
 from src.pipeline import (
     DeckDraft, OutlineEvidence, PreparedOutline, RunArtifacts, attach_supplemental, build_deck, export_draft,
-    prepare_outline, repair_draft_slide, write_run_log,
+    prepare_outline, repair_draft_slide, rereview_deck, write_run_log,
 )
+from src.review_context import ReviewInputsError, read_review_inputs, write_review_inputs
 from src.source_pdf import SelectedPdf, SourcePdfError, read_selected_pdf
 from src.supplemental import find_supplemental_sources, validate_reference_url
 from src.visual_extract import PageReview, review_extracted_page
@@ -47,6 +52,10 @@ class RunSnapshot:
     repairing_slide: int | None = None
     repair_message: str | None = None
     repair_findings: tuple[str, ...] = ()
+    rereview_available: bool = False
+    review_verdicts: tuple[SlideGrade, ...] = ()
+    repair_available: bool = True
+    repair_pages_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,7 @@ class SavedRun:
     artifacts: RunArtifacts
     flags: tuple[SlideNote, ...] = ()
     source_mode: str | None = None
+    rereview_available: bool = False
 
 
 @dataclass
@@ -70,7 +80,7 @@ class _Run:
     draft: DeckDraft | None = None
 
 
-_ACTIVE = {"outlining", "awaiting_approval", "generating", "repairing"}
+_ACTIVE = {"outlining", "awaiting_approval", "generating", "repairing", "rereviewing"}
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -82,6 +92,10 @@ def _event(agent, action, **details):
 def _paths(directory):
     return RunArtifacts(directory / "deck.pptx", directory / "review_packet.md",
                         directory / "run.json")
+
+
+def _run_id():
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:12]}"
 
 
 class RunManager:
@@ -107,7 +121,7 @@ class RunManager:
                 raise RunConflict("Finish or discard the current run before starting another.")
             if source_path is None and source_extractor != "pypdf":
                 raise RunConflict("Choose an original PDF to use a PDF text extractor.")
-            run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:12]}"
+            run_id = _run_id()
             directory = self._output / "runs" / run_id
             directory.mkdir(parents=True)
             source_path = Path(source_path) if source_path is not None else None
@@ -118,6 +132,50 @@ class RunManager:
             run.log.append(_event("human", "run_requested", request=spec.model_dump(mode="json")))
             self._current = run
             self._executor.submit(self._outline, run, None)
+            return run_id
+
+    def review_deck(self, bundle_id):
+        with self._lock:
+            if self._current and self._current.snapshot.status in _ACTIVE:
+                raise RunConflict("Finish or discard the current run before starting a full-deck review.")
+            if not isinstance(bundle_id, str) or re.fullmatch(r"[A-Za-z0-9_-]+", bundle_id) is None:
+                raise RunConflict("Choose a saved run with verified review inputs.")
+            runs = self._output / "runs"
+            bundle = runs / bundle_id
+            artifacts = _paths(bundle)
+            if (runs.resolve() != runs or bundle.resolve() != bundle or
+                    any(path.resolve() != path or not path.is_file()
+                        for path in (artifacts.deck, artifacts.packet, artifacts.log))):
+                raise RunConflict("The chosen review bundle is unavailable.")
+
+            context = self._review_inputs_path(bundle_id)
+            if not context.is_file():
+                raise RunConflict("This run has no saved approved outline and verified excerpts.")
+            inputs = read_review_inputs(context, artifacts.deck)
+            log = list(self._read_events(artifacts.log))
+            if not log:
+                raise RunConflict("The chosen run's audit log could not be read.")
+
+            source = inputs.source
+            if (self._current and self._current.snapshot.artifacts == artifacts
+                    and self._current.selected_source is not None
+                    and self._current.selected_source.sha256 == source.sha256
+                    and self._current.selected_source.extractor == source.extractor):
+                source = self._current.selected_source
+            run_id = _run_id()
+            run = _Run(
+                RunSnapshot(run_id, inputs.spec, status="rereviewing", message="Reviewing the saved PowerPoint.",
+                            outline=inputs.outline, total_slides=len(inputs.deck.slides), flags=self._flags(log),
+                            artifacts=artifacts, source_name=source.filename, source_warnings=source.warnings,
+                            source_extractor=source.extractor, source_pages=source.page_count,
+                            visual_reviews=inputs.visual_reviews, rereview_available=True,
+                            repair_available=False, repair_pages_available=bool(source.pages)),
+                runs / run_id, log=log, selected_source=source,
+                prepared=PreparedOutline(inputs.outline, (), inputs.chunks, pinned_source=True),
+            )
+            run.log.append(_event("human", "full_deck_rereview_requested", source_bundle=bundle_id))
+            self._current = run
+            self._executor.submit(self._review_saved_deck, run, inputs.deck, inputs.deck_sha256)
             return run_id
 
     def revise(self, run_id, revision, feedback):
@@ -325,6 +383,47 @@ class RunManager:
             run.snapshot = replace(run.snapshot, sources=prepared.evidence, revision=run.snapshot.revision + 1,
                                    supplementing_slide=None, supplemental_message=message)
 
+    def _review_inputs_path(self, bundle_id):
+        folder = self._output / ".review-inputs"
+        path = folder / f"{bundle_id}.json"
+        if folder.resolve() != folder or path.resolve() != path:
+            raise ReviewInputsError("The saved review inputs resolve outside the local review storage.")
+        return path
+
+    def _persist_review_inputs(self, run, draft, prepared, deck_path, directory, *, required=False):
+        if run.selected_source is None:
+            return False
+        try:
+            destination = self._review_inputs_path(directory.name)
+            destination.parent.mkdir(exist_ok=True)
+            with TemporaryDirectory(dir=destination.parent) as staging:
+                temporary = Path(staging) / "review-inputs.json"
+                write_review_inputs(temporary, deck_path, spec=run.snapshot.spec, outline=prepared.outline,
+                                    deck=draft.deck, source=run.selected_source, chunks=prepared.chunks,
+                                    visual_reviews=run.snapshot.visual_reviews)
+                temporary.replace(destination)
+        except (OSError, ReviewInputsError) as error:
+            if required:
+                raise
+            _LOGGER.warning("Could not preserve review inputs for Eir run %s (%s)",
+                            run.snapshot.id, type(error).__name__)
+            return False
+        return True
+
+    def _publish_review_bundle(self, run, draft, prepared, deck_path, directory, *, inputs_required=False):
+        saved = self._persist_review_inputs(run, draft, prepared, deck_path, directory,
+                                            required=inputs_required)
+        try:
+            deck_path.parent.rename(directory)
+        except OSError:
+            if saved:
+                try:
+                    self._review_inputs_path(directory.name).unlink(missing_ok=True)
+                except (OSError, ReviewInputsError):
+                    _LOGGER.warning("Could not remove review inputs for unpublished bundle %s", directory.name)
+            raise
+        return saved
+
     def _generate(self, run):
         def update_progress(completed, flag):
             with self._lock:
@@ -348,6 +447,7 @@ class RunManager:
                 staged = _paths(Path(staging))
                 export_draft(draft, staged, run.log, selected_source=run.selected_source,
                              visual_reviews=run.snapshot.visual_reviews)
+                saved = self._persist_review_inputs(run, draft, run.prepared, staged.deck, run.directory)
                 staged.deck.replace(artifacts.deck)
                 staged.packet.replace(artifacts.packet)
                 staged.log.replace(artifacts.log)
@@ -357,7 +457,7 @@ class RunManager:
         with self._lock:
             self._keep_repair_context(run, draft)
             run.snapshot = replace(run.snapshot, status="completed", message="Draft files are ready.",
-                                   artifacts=artifacts, flags=draft.flags)
+                                   artifacts=artifacts, flags=draft.flags, rereview_available=saved)
 
     @staticmethod
     def _keep_repair_context(run, draft):
@@ -395,6 +495,9 @@ class RunManager:
                 return
 
             stage = "saving the revised files"
+            prepared_chunks = list(run.prepared.chunks)
+            prepared_chunks[index] = ordered
+            prepared = replace(run.prepared, chunks=tuple(prepared_chunks))
             directory = run.directory.with_name(f"{run.directory.name}-repair-{run.snapshot.revision}")
             audit = [*run.log, _event("verdict", "slide_repaired", slide_index=index, attempt=attempt,
                                       passed=True, problems=[], previous_bundle=run.snapshot.artifacts.deck.parent.name,
@@ -405,7 +508,7 @@ class RunManager:
                 bundle.mkdir()
                 export_draft(draft, _paths(bundle), audit, selected_source=run.selected_source,
                              visual_reviews=run.snapshot.visual_reviews)
-                bundle.rename(directory)
+                saved = self._publish_review_bundle(run, draft, prepared, _paths(bundle).deck, directory)
         except Exception as error:
             kind = type(error).__name__
             _LOGGER.error("Slide repair failed for Eir run %s slide %s while %s (%s)",
@@ -416,9 +519,11 @@ class RunManager:
 
         with self._lock:
             run.log = audit
+            run.prepared = prepared
             self._keep_repair_context(run, draft)
             run.snapshot = replace(run.snapshot, status="completed", artifacts=_paths(directory),
                                    flags=draft.flags, repairing_slide=None,
+                                   rereview_available=saved, review_verdicts=(),
                                    message="Revised draft files are ready.",
                                    repair_message=f"Slide {slide_number} passed re-review. Revised files are ready.")
 
@@ -430,6 +535,56 @@ class RunManager:
                                    message="Current draft files are ready.",
                                    repair_message=f"Slide {slide_number} was not replaced.",
                                    repair_findings=tuple(problems))
+
+    def _review_saved_deck(self, run, deck, expected_sha):
+        from src.llm import capture_usage_log, config
+
+        def update_progress(completed):
+            with self._lock:
+                run.snapshot = replace(run.snapshot, completed_slides=completed)
+
+        stage = "opening the saved PowerPoint"
+        try:
+            with TemporaryDirectory(dir=run.directory.parent) as staging:
+                bundle = Path(staging) / "bundle"
+                bundle.mkdir()
+                staged = _paths(bundle)
+                copyfile(run.snapshot.artifacts.deck, staged.deck)
+                if sha256(staged.deck.read_bytes()).hexdigest() != expected_sha:
+                    raise ReviewInputsError("The saved PowerPoint changed. Select its matching review bundle.")
+                stage = "re-reviewing the slides"
+                run.log.append(_event("eir", "full_deck_rereview_started", provider=config["provider"],
+                                      model=config["model"], deck_sha256=expected_sha,
+                                      primary_source_sha256=run.selected_source.sha256,
+                                      extractor=run.selected_source.extractor, visual_notes_excluded=True))
+                with capture_usage_log(run.log):
+                    draft = rereview_deck(deck, run.prepared, on_slide=update_progress)
+                stage = "saving the new review files"
+                passed = len(draft.grades) - len(draft.flags)
+                run.log.append(_event("eir", "full_deck_rereview_completed", reviewed=len(draft.grades),
+                                      passed=passed, deck_sha256=expected_sha))
+                write_packet(draft.deck, draft.grades, draft.attempts, staged.packet,
+                             selected_source=run.selected_source, visual_reviews=run.snapshot.visual_reviews,
+                             full_deck_review=True)
+                write_run_log(staged.log, run.log)
+                self._publish_review_bundle(run, draft, run.prepared, staged.deck, run.directory,
+                                            inputs_required=True)
+        except Exception as error:
+            kind = type(error).__name__
+            _LOGGER.error("Full-deck review failed for Eir run %s while %s (%s)", run.snapshot.id, stage, kind)
+            problem = str(error) if isinstance(error, ReviewInputsError) or kind == "OpenAIProviderError" else (
+                f"Eir stopped while {stage} ({kind})."
+            )
+            with self._lock:
+                run.snapshot = replace(run.snapshot, status="completed", message=f"Full-deck review failed. {problem}")
+            return
+
+        with self._lock:
+            self._keep_repair_context(run, draft)
+            run.snapshot = replace(run.snapshot, status="completed", artifacts=_paths(run.directory),
+                                   flags=draft.flags, review_verdicts=tuple(draft.grades),
+                                   repair_available=bool(draft.flags),
+                                   message=f"Full-deck re-review complete. {passed} of {len(draft.grades)} slides passed.")
 
     def _save_partial_log(self, run):
         try:
@@ -490,7 +645,12 @@ class RunManager:
         flags = self._flags(events)
         mode = next((event["source_mode"].replace("-", "_") for event in events
                      if isinstance(event.get("source_mode"), str)), None)
-        saved.append((modified, SavedRun(run_id or directory.name, title, date, artifacts, flags, mode)))
+        try:
+            rereview_available = run_id is None and self._review_inputs_path(directory.name).is_file()
+        except (OSError, ReviewInputsError):
+            rereview_available = False
+        saved.append((modified, SavedRun(run_id or directory.name, title, date, artifacts, flags, mode,
+                                         rereview_available)))
 
     @staticmethod
     def _read_events(log_path):

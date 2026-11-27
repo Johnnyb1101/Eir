@@ -1,4 +1,4 @@
-def write_packet(deck, verdicts, attempts, path, *, selected_source=None, visual_reviews=()):
+def write_packet(deck, verdicts, attempts, path, *, selected_source=None, visual_reviews=(), full_deck_review=False):
     if len(deck.slides) != len(verdicts):
         raise ValueError(f"{len(deck.slides)} slides but {len(verdicts)} verdicts")
     if len(deck.slides) != len(attempts):
@@ -26,8 +26,11 @@ def write_packet(deck, verdicts, attempts, path, *, selected_source=None, visual
             for item in review.uncertainties:
                 lines.append(f"- Uncertainty · {item}")
             lines.append("")
+    if full_deck_review:
+        lines.extend(["## Full-deck re-review", "Each teaching slide received a fresh verdict on the saved PowerPoint.", ""])
     for i, (slide, verdict) in enumerate(zip(deck.slides, verdicts)):
-        lines.append(f"## Slide {i}: {slide.title}")
+        slide_number = i + 1 if full_deck_review else i
+        lines.append(f"## Slide {slide_number}: {slide.title}")
         lines.append("**Content:**")
         for b in slide.bullets:
             lines.append(f"- {b}")
